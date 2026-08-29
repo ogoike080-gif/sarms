@@ -1,7 +1,7 @@
 <?php
 // ============================================================
 // SARMS — api/db.php
-// Place this file at: C:\xampp\htdocs\sarms-react\api\db.php
+// Now using Railway MySQL via environment variables
 // ============================================================
 
 // ── Headers ─────────────────────────────────────────────────
@@ -15,11 +15,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
-// ── CONFIG — Edit DB_PASS if you set a MySQL password ───────
-define('DB_HOST', 'localhost');
-define('DB_USER', 'root');
-define('DB_PASS', '');          // XAMPP default = empty string
-define('DB_NAME', 'sarms_db');  // Must match what you created in phpMyAdmin
+// ── CONFIG — Use Railway environment variables ──────────────
+// For local development, fall back to localhost
+define('DB_HOST', getenv('MYSQLHOST') ?: 'localhost');
+define('DB_USER', getenv('MYSQLUSER') ?: 'root');
+define('DB_PASS', getenv('MYSQLPASSWORD') ?: '');
+define('DB_NAME', getenv('MYSQLDATABASE') ?: 'sarms_db');
+define('DB_PORT', getenv('MYSQLPORT') ?: 3306);
 
 // ── Connect to MySQL ────────────────────────────────────────
 function db(): PDO {
@@ -29,7 +31,7 @@ function db(): PDO {
     try {
         // First try to connect to the specific database
         $pdo = new PDO(
-            'mysql:host=' . DB_HOST . ';dbname=' . DB_NAME . ';charset=utf8mb4',
+            'mysql:host=' . DB_HOST . ';port=' . DB_PORT . ';dbname=' . DB_NAME . ';charset=utf8mb4',
             DB_USER, DB_PASS,
             [
                 PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
@@ -54,7 +56,7 @@ function db(): PDO {
             http_response_code(500);
             echo json_encode([
                 'error' => 'Database "' . DB_NAME . '" does not exist.',
-                'fix'   => 'Open http://localhost/phpmyadmin and import the sarms_database.sql file.',
+                'fix'   => 'The database should have been created automatically. Check Railway MySQL logs.',
             ]);
             exit;
         }
@@ -63,8 +65,8 @@ function db(): PDO {
         if (strpos($msg, 'Connection refused') !== false || strpos($msg, 'No connection') !== false) {
             http_response_code(500);
             echo json_encode([
-                'error' => 'MySQL is not running.',
-                'fix'   => 'Open XAMPP Control Panel and click START next to MySQL.',
+                'error' => 'Cannot connect to MySQL.',
+                'fix'   => 'Check that your Railway MySQL service is running and environment variables are set correctly.',
             ]);
             exit;
         }
@@ -74,7 +76,7 @@ function db(): PDO {
             http_response_code(500);
             echo json_encode([
                 'error' => 'Wrong MySQL username or password.',
-                'fix'   => 'Edit api/db.php and set the correct DB_USER and DB_PASS.',
+                'fix'   => 'Verify MYSQLUSER, MYSQLPASSWORD, and MYSQLHOST environment variables are set correctly.',
             ]);
             exit;
         }
@@ -116,6 +118,7 @@ if ($action === 'ping') {
         'ok'      => true,
         'php'     => PHP_VERSION,
         'db'      => DB_NAME,
+        'host'    => DB_HOST,
         'message' => 'SARMS database connection is working!',
     ]);
     exit;
@@ -235,3 +238,4 @@ function defaultState(): array {
         'attendance'       => [],
     ];
 }
+
