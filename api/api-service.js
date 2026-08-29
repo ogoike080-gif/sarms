@@ -1,6 +1,6 @@
 // api-service.js — DB.PHP VERSION (SIMPLIFIED)
 
-const API = "http://localhost/sarms/api/db.php";
+const API = "/api/db.php";
 
 // ─── Core fetch ───────────────────────────────────────────────
 async function request(action, data = null) {
