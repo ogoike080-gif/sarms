@@ -1,0 +1,30 @@
+Options -Indexes -MultiViews
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # XAMPP/Apache (mod_php, CGI, or FastCGI) frequently does NOT expose the
+  # incoming Authorization header to PHP as $_SERVER['HTTP_AUTHORIZATION']
+  # by default. This copies it into an env var that PHP DOES see, which
+  # api/*.php also reads as a fallback via REDIRECT_HTTP_AUTHORIZATION.
+  # Without this rule, every Bearer token gets silently dropped before it
+  # ever reaches calendar.php/lms.php/etc., producing 401s even when the
+  # frontend is sending the header correctly.
+  RewriteCond %{HTTP:Authorization} .
+  RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+  # If the file or directory exists, serve it directly (assets, api, etc.)
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Send everything else to index.html (React handles routing)
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+# PHP file upload limits
+<IfModule mod_php.c>
+  php_value upload_max_filesize 20M
+  php_value post_max_size 20M
+  php_value max_execution_time 60
+</IfModule>

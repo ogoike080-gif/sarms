@@ -1,0 +1,5 @@
+session,term,event,start,end,description,status
+2026/2027,First Term,Resumption,2026-09-14,2026-09-14,Students resume for the new session,scheduled
+2026/2027,First Term,Mid-Term Break,2026-10-26,2026-10-30,,scheduled
+2026/2027,First Term,Examination,2026-12-07,2026-12-18,End of term exams,scheduled
+2026/2027,First Term,Closing,2026-12-18,2026-12-18,School closes for the term,scheduled
