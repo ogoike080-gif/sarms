@@ -379,5 +379,30 @@ if ($action === 'generate_content') {
     respond(['ok' => true, 'result' => $result]);
 }
 
+// ════════════════════════ ANALYTICS INSIGHTS (Admin dashboard) ════════════════════════
+// Powers the "Generate Insights" button on the Analytics page. Takes the
+// already-computed class/subject/top-student stats from the frontend
+// (no extra DB query needed here — the frontend has already assembled
+// exactly what it wants summarized) and asks Gemini to turn it into a
+// few plain-English, actionable observations.
+if ($action === 'analytics_insights') {
+    requireTeacherOrAdmin($authUser);
+    requireFields($body, ['context']);
+
+    $systemPrompt = 'You are an academic analytics assistant for a Nigerian secondary school. '
+        . 'Given class averages, subject averages, and top students as JSON, '
+        . 'write 3-4 short, specific, actionable insights in plain text — no markdown, no headers, '
+        . 'just clear sentences. Focus on performance gaps between classes/subjects, notable '
+        . 'strengths, and one or two concrete recommendations a school admin could act on.';
+
+    try {
+        $result = callGemini($systemPrompt, [], json_encode($body['context'], JSON_UNESCAPED_UNICODE));
+    } catch (Throwable $e) {
+        respondError($e->getMessage(), 502);
+    }
+
+    respond(['ok' => true, 'result' => $result]);
+}
+
 http_response_code(404);
 echo json_encode(['error' => 'Unknown action: ' . htmlspecialchars($action)]);

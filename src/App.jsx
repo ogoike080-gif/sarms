@@ -3497,27 +3497,27 @@ function AnalyticsPage({ state, currentUser, showNotification }) {
         totalStudents: students.length,
       };
 
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      // Call our own backend (api/ai.php), which holds the Gemini key
+      // server-side — never call a model API directly from the browser,
+      // since that would require shipping a secret key to every client.
+      const { origin, port } = window.location;
+      const segments = window.location.pathname.split('/').filter(Boolean);
+      const folder = port === '5173' || port === '3000' ? '' : ((segments.length > 0 && segments[0] !== 'portal') ? '/' + segments[0] : '');
+      const aiBase = (port === '5173' || port === '3000') ? '/api/ai.php' : origin + folder + '/api/ai.php';
+
+      const resp = await fetch(`${aiBase}?action=analytics_insights`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 600,
-          messages: [
-            {
-              role: "user",
-              content: `You are an academic analytics AI for ${state.institution.name}. Analyze this data and provide 3-4 specific, actionable insights in plain text (no markdown, just clear sentences). Focus on performance gaps, strengths, and recommendations. Data: ${JSON.stringify(context)}`,
-            },
-          ],
-        }),
+        headers: { "Content-Type": "application/json", ...AuthToken.authHeader() },
+        body: JSON.stringify({ context }),
       });
       const data = await resp.json();
-      setAiInsight(
-        data.content?.[0]?.text || "Could not generate insights at this time."
-      );
+      if (!resp.ok || !data.result) {
+        throw new Error(data.error || `Server error (${resp.status}).`);
+      }
+      setAiInsight(data.result);
     } catch (e) {
       setAiInsight(
-        "AI insights unavailable. Ensure API key is configured in the environment."
+        `AI insights unavailable: ${e.message}`
       );
     }
     setLoadingAI(false);
