@@ -1448,29 +1448,43 @@ function SARMS() {
     const segments = window.location.pathname.split('/').filter(Boolean);
     const folder = port === '5173' || port === '3000' ? '' : ((segments.length > 0 && segments[0] !== 'portal') ? '/' + segments[0] : '');
     const authBase = (port === '5173' || port === '3000') ? '/api/auth_jwt.php' : origin + folder + '/api/auth_jwt.php';
+    const migrateBase = (port === '5173' || port === '3000') ? '/api/lms_migrate.php' : origin + folder + '/api/lms_migrate.php';
 
-    let jwtResponse;
-    try {
+    const tryJwtLogin = async () => {
       const res = await fetch(`${authBase}?action=login`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       });
       const text = await res.text();
-      try { jwtResponse = JSON.parse(text); }
+      let parsed;
+      try { parsed = JSON.parse(text); }
       catch (e) { throw new Error('Server returned an invalid response.'); }
-      if (!res.ok || !jwtResponse.token) {
-        throw new Error(jwtResponse.error || `Authentication server error (${res.status}).`);
+      if (!res.ok || !parsed.token) {
+        throw new Error(parsed.error || `Authentication server error (${res.status}).`);
       }
-    } catch (e) {
-      // Do NOT log the user in on JWT failure — surface a clear error
-      // instead of silently falling back to the legacy client-side-only
-      // session, which is exactly the state that produced 401s everywhere.
-      return {
-        ok: false,
-        error: `Signed in, but secure authentication failed: ${e.message} ` +
-               `(If this is a fresh install, the normalized users table may ` +
-               `need the one-time backfill — see api/lms_migrate.php.)`,
-      };
+      return parsed;
+    };
+
+    let jwtResponse;
+    try {
+      jwtResponse = await tryJwtLogin();
+    } catch (firstError) {
+      // Most likely cause: this account was created/edited after the last
+      // backfill ran, so it has no row (or a stale password) in the
+      // normalized users table auth_jwt.php checks against. Rather than
+      // making every new signup require a manual admin step, self-heal:
+      // silently re-run the backfill and retry once before giving up.
+      try {
+        await fetch(`${migrateBase}?action=backfill`);
+        jwtResponse = await tryJwtLogin();
+      } catch (secondError) {
+        return {
+          ok: false,
+          error: `Signed in, but secure authentication failed: ${secondError.message} ` +
+                 `(Tried an automatic resync first. If this keeps happening, the ` +
+                 `normalized users table may need attention — see api/lms_migrate.php.)`,
+        };
+      }
     }
 
     AuthToken.set(jwtResponse.token);

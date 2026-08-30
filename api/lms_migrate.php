@@ -181,8 +181,9 @@ if ($action === 'backfill') {
             $summary['subjects']['inserted']++;
         }
 
-        // — users (two passes: pass 1 creates rows, pass 2 resolves child_id
-        //   since a parent's child may appear before or after the parent) —
+        // — users (two passes: pass 1 creates/syncs rows, pass 2 resolves
+        //   child_id since a parent's child may appear before or after
+        //   the parent) —
         $blobUsers = readSlice('users');
         $userIdMap = [];
         foreach ($blobUsers as $u) {
@@ -191,11 +192,40 @@ if ($action === 'backfill') {
             $stmt = $pdo->prepare('SELECT id FROM users WHERE legacy_id = ?');
             $stmt->execute([$legacyId]);
             $existingId = $stmt->fetchColumn();
-            if ($existingId) { $userIdMap[$legacyId] = (int)$existingId; $summary['users']['skipped']++; continue; }
 
             $role = $u['role'] ?? 'student';
             $classId = isset($u['classId']) && isset($classIdMap[(string)$u['classId']]) ? $classIdMap[(string)$u['classId']] : null;
+            // Re-hash from the current blob password every run — this
+            // table has to track the blob's password field, not just its
+            // first snapshot, otherwise a password reset from Students/
+            // Teachers management never reaches secure login (auth_jwt.php)
+            // and this exact 401 keeps recurring for any edited account.
             $passwordHash = password_hash((string)($u['password'] ?? bin2hex(random_bytes(8))), PASSWORD_BCRYPT);
+
+            if ($existingId) {
+                try {
+                    $pdo->prepare('UPDATE users SET role=?, name=?, email=?, password_hash=?, student_id=?, class_id=?, avatar=?, is_active=? WHERE id=?')
+                        ->execute([
+                            $role, $u['name'] ?? 'Unnamed', $u['email'], $passwordHash,
+                            $u['studentId'] ?? null, $classId, $u['avatar'] ?? null,
+                            isset($u['isActive']) ? (int)(bool)$u['isActive'] : 1, $existingId,
+                        ]);
+                } catch (PDOException $e) {
+                    // e.g. this user's email was just changed to one another
+                    // row already has — report it rather than failing the
+                    // whole batch over one row.
+                    if ($e->getCode() === '23000') {
+                        $summary['users']['duplicateEmailSkipped'] = ($summary['users']['duplicateEmailSkipped'] ?? []);
+                        $summary['users']['duplicateEmailSkipped'][] = $u['email'];
+                        $userIdMap[$legacyId] = (int)$existingId;
+                        continue;
+                    }
+                    throw $e;
+                }
+                $userIdMap[$legacyId] = (int)$existingId;
+                $summary['users']['skipped']++; // kept the "skipped" key for compatibility; it's really "synced"
+                continue;
+            }
 
             try {
                 $pdo->prepare('INSERT INTO users (role, name, email, password_hash, student_id, class_id, avatar, is_active, legacy_id)
