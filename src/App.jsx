@@ -89,7 +89,7 @@ const DB = (() => {
     }
     // On XAMPP (port 80), detect the subfolder from the URL
     const segments = window.location.pathname.split('/').filter(Boolean);
-    const folder = segments.length > 0 ? '/' + segments[0] : '';
+    const folder = (segments.length > 0 && segments[0] !== 'portal') ? '/' + segments[0] : '';
     return origin + folder + '/api/db.php';
   })();
 
@@ -162,7 +162,7 @@ const CalendarAPI = (() => {
     const { origin, port } = window.location;
     if (port === '5173' || port === '3000') return '/api/calendar.php';
     const segments = window.location.pathname.split('/').filter(Boolean);
-    const folder = segments.length > 0 ? '/' + segments[0] : '';
+    const folder = (segments.length > 0 && segments[0] !== 'portal') ? '/' + segments[0] : '';
     return origin + folder + '/api/calendar.php';
   })();
 
@@ -202,7 +202,7 @@ const LmsAPI = (() => {
     const { origin, port } = window.location;
     if (port === '5173' || port === '3000') return '/api/lms.php';
     const segments = window.location.pathname.split('/').filter(Boolean);
-    const folder = segments.length > 0 ? '/' + segments[0] : '';
+    const folder = (segments.length > 0 && segments[0] !== 'portal') ? '/' + segments[0] : '';
     return origin + folder + '/api/lms.php';
   })();
 
@@ -269,7 +269,7 @@ const AssignmentsAPI = (() => {
     const { origin, port } = window.location;
     if (port === '5173' || port === '3000') return '/api/assignments.php';
     const segments = window.location.pathname.split('/').filter(Boolean);
-    const folder = segments.length > 0 ? '/' + segments[0] : '';
+    const folder = (segments.length > 0 && segments[0] !== 'portal') ? '/' + segments[0] : '';
     return origin + folder + '/api/assignments.php';
   })();
 
@@ -306,7 +306,7 @@ const QuizzesAPI = (() => {
     const { origin, port } = window.location;
     if (port === '5173' || port === '3000') return '/api/quizzes.php';
     const segments = window.location.pathname.split('/').filter(Boolean);
-    const folder = segments.length > 0 ? '/' + segments[0] : '';
+    const folder = (segments.length > 0 && segments[0] !== 'portal') ? '/' + segments[0] : '';
     return origin + folder + '/api/quizzes.php';
   })();
 
@@ -349,7 +349,7 @@ const AIApi = (() => {
     const { origin, port } = window.location;
     if (port === '5173' || port === '3000') return '/api/ai.php';
     const segments = window.location.pathname.split('/').filter(Boolean);
-    const folder = segments.length > 0 ? '/' + segments[0] : '';
+    const folder = (segments.length > 0 && segments[0] !== 'portal') ? '/' + segments[0] : '';
     return origin + folder + '/api/ai.php';
   })();
 
@@ -382,7 +382,7 @@ const AnalyticsAPI = (() => {
     const { origin, port } = window.location;
     if (port === '5173' || port === '3000') return '/api/analytics.php';
     const segments = window.location.pathname.split('/').filter(Boolean);
-    const folder = segments.length > 0 ? '/' + segments[0] : '';
+    const folder = (segments.length > 0 && segments[0] !== 'portal') ? '/' + segments[0] : '';
     return origin + folder + '/api/analytics.php';
   })();
 
@@ -1368,6 +1368,11 @@ function SARMS() {
       try {
         const loc = window.location;
         const parts = loc.pathname.split('/');
+        if (parts.includes('portal')) {
+          // Railway/production: api/ always lives at the domain root,
+          // regardless of the /portal path the SPA itself is served from.
+          return loc.origin + '/api/db.php?action=ping';
+        }
         const idx = parts.findIndex(p => p === 'sarms');
         if (idx >= 0) {
           return loc.origin + parts.slice(0, idx + 1).join('/') + '/api/db.php?action=ping';
@@ -1441,7 +1446,7 @@ function SARMS() {
 
     const { origin, port } = window.location;
     const segments = window.location.pathname.split('/').filter(Boolean);
-    const folder = port === '5173' || port === '3000' ? '' : (segments.length > 0 ? '/' + segments[0] : '');
+    const folder = port === '5173' || port === '3000' ? '' : ((segments.length > 0 && segments[0] !== 'portal') ? '/' + segments[0] : '');
     const authBase = (port === '5173' || port === '3000') ? '/api/auth_jwt.php' : origin + folder + '/api/auth_jwt.php';
 
     let jwtResponse;

@@ -54,13 +54,20 @@ if ($uri !== '/' && is_file($distFile)) {
     return true;
 }
 
-// ── 4. Everything else (client-side routes) — serve the built SPA shell ──
-$index = __DIR__ . '/dist/index.html';
-if (is_file($index)) {
+// ── 4. Everything else — landing page at "/", SARMS app at "/portal" ──
+$normalized = rtrim($uri, '/');
+if ($normalized === '' || $normalized === '/portal') {
+    $file = ($normalized === '/portal') ? __DIR__ . '/dist/index.html' : __DIR__ . '/dist/landing.html';
+} else {
+    // Any other unmatched path (no react-router in this app — it's a single
+    // state-driven page) falls back to the marketing landing page.
+    $file = __DIR__ . '/dist/landing.html';
+}
+if (is_file($file)) {
     header('Content-Type: text/html; charset=utf-8');
-    readfile($index);
+    readfile($file);
 } else {
     http_response_code(500);
-    echo 'dist/index.html not found — did `npm run build` run before startup?';
+    echo basename($file) . ' not found in dist/ — did `npm run build` run before startup?';
 }
 return true;
