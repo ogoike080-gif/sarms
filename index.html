@@ -455,14 +455,14 @@
       </a>
       <div class="portal-dropdown">
         <div class="portal-dropdown-header">Access Your Portal</div>
-        <a href="https://sarms-production.up.railway.app/" class="portal-item student-link">
+        <a href="https://sarms-production.up.railway.app/" class="portal-item student-link" target="_blank" rel="noopener">
           <div class="portal-item-icon student">🎓</div>
           <div class="portal-item-text">
             <strong>Student Portal</strong>
             <span>Results · Timetable · Resources</span>
           </div>
         </a>
-        <a href="https://sarms-production.up.railway.app/" class="portal-item staff-link">
+        <a href="https://sarms-production.up.railway.app/" class="portal-item staff-link" target="_blank" rel="noopener">
           <div class="portal-item-icon staff">🏫</div>
           <div class="portal-item-text">
             <strong>Staff &amp; Admin Portal</strong>
@@ -491,8 +491,8 @@
   <a href="#gallery"  onclick="closeMobile()">Gallery</a>
   <a href="#contact"  onclick="closeMobile()">Contact</a>
   <div class="mobile-portal-group">
-    <a href="https://sarms-production.up.railway.app/" class="mobile-portal-btn student" onclick="closeMobile()">🎓 Student Portal</a>
-    <a href="https://sarms-production.up.railway.app/" class="mobile-portal-btn staff"   onclick="closeMobile()">🏫 Staff Portal</a>
+    <a href="https://sarms-production.up.railway.app/" class="mobile-portal-btn student" target="_blank" rel="noopener" onclick="closeMobile()">🎓 Student Portal</a>
+    <a href="https://sarms-production.up.railway.app/" class="mobile-portal-btn staff" target="_blank" rel="noopener"   onclick="closeMobile()">🏫 Staff Portal</a>
   </div>
 </div>
 
@@ -711,13 +711,13 @@
   <div class="gold-line fade-up"></div>
   <p class="section-lead fade-up">Genius Model School runs a full digital management system. Students can check results, teachers can enter scores, and administrators can manage everything — all online.</p>
   <div class="portal-cards">
-    <a href="https://sarms-production.up.railway.app/" class="portal-card gold-card fade-up">
+    <a href="https://sarms-production.up.railway.app/" class="portal-card gold-card fade-up" target="_blank" rel="noopener">
       <span class="portal-card-icon">🎓</span>
       <div class="portal-card-title">Student Portal</div>
       <div class="portal-card-desc">Check your results, view class announcements, access assignments, and track your academic progress — anytime, anywhere.</div>
       <span class="portal-btn">Access Student Portal →</span>
     </a>
-    <a href="https://sarms-production.up.railway.app/" class="portal-card blue-card fade-up fade-up-delay-1">
+    <a href="https://sarms-production.up.railway.app/" class="portal-card blue-card fade-up fade-up-delay-1" target="_blank" rel="noopener">
       <span class="portal-card-icon">🏫</span>
       <div class="portal-card-title">Staff &amp; Admin Portal</div>
       <div class="portal-card-desc">Teachers enter scores, principals monitor attendance, bursars manage payments, and admins control the entire school system in one place.</div>
@@ -798,7 +798,7 @@
         <div class="contact-icon">🌐</div>
         <div class="contact-text">
           <strong>School Portal</strong>
-          <a href="https://sarms-production.up.railway.app/">SARMS — School Management System</a>
+          <a href="https://sarms-production.up.railway.app/" target="_blank" rel="noopener">SARMS — School Management System</a>
         </div>
       </div>
       <div class="contact-item">
@@ -860,8 +860,8 @@
         <li><a href="#goals">ICT &amp; Digital Skills</a></li>
         <li><a href="#goals">Technical &amp; Vocational</a></li>
         <li><a href="#goals">Character &amp; Leadership</a></li>
-        <li><a href="https://sarms-production.up.railway.app/">Student Portal</a></li>
-        <li><a href="https://sarms-production.up.railway.app/">Staff Portal</a></li>
+        <li><a href="https://sarms-production.up.railway.app/" target="_blank" rel="noopener">Student Portal</a></li>
+        <li><a href="https://sarms-production.up.railway.app/" target="_blank" rel="noopener">Staff Portal</a></li>
       </ul>
     </div>
   </div>
@@ -872,6 +872,15 @@
 </footer>
 
 <script>
+  // ── PORTAL LINK HANDLER ──
+  // Force all portal links to open correctly even if same domain
+  document.querySelectorAll('a[href="https://sarms-production.up.railway.app/"]').forEach(function(link) {
+    link.addEventListener('click', function(e) {
+      e.preventDefault();
+      window.open('https://sarms-production.up.railway.app/', '_blank');
+    });
+  });
+
   // ── NAVBAR SCROLL ──
   const navbar = document.getElementById('navbar');
   window.addEventListener('scroll', () => navbar.classList.toggle('scrolled', window.scrollY > 60));
@@ -925,5 +934,29 @@
   }, { threshold: 0.1 });
   document.querySelectorAll('.fade-up').forEach(el => observer.observe(el));
 </script>
+
+<!-- FLOATING PORTAL BUTTON (always visible) -->
+<div id="floatingPortal" style="
+  position: fixed; bottom: 24px; right: 24px; z-index: 9999;
+  display: flex; flex-direction: column; gap: 10px; align-items: flex-end;
+">
+  <a href="https://sarms-production.up.railway.app/" 
+     onclick="window.open('https://sarms-production.up.railway.app/','_blank');return false;"
+     style="
+       display: flex; align-items: center; gap: 10px;
+       background: linear-gradient(135deg, #D4AF37, #A08020);
+       color: #0A1628; padding: 14px 22px; border-radius: 50px;
+       font-family: 'Outfit', sans-serif; font-weight: 800; font-size: 0.82rem;
+       letter-spacing: 0.1em; text-transform: uppercase; text-decoration: none;
+       box-shadow: 0 8px 32px rgba(212,175,55,0.5);
+       transition: all 0.3s; white-space: nowrap;
+     "
+     onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 14px 40px rgba(212,175,55,0.7)'"
+     onmouseout="this.style.transform='translateY(0)';this.style.boxShadow='0 8px 32px rgba(212,175,55,0.5)'"
+  >
+    🔐 Login to Portal
+  </a>
+</div>
+
 </body>
 </html>
