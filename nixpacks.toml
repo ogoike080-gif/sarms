@@ -1,0 +1,7 @@
+# Nixpacks auto-detects this as a Node project (package.json) and would
+# normally only provision Node. The actual backend is PHP (api/*.php),
+# served by router.php via PHP's built-in server — so PHP (plus the
+# pdo_mysql extension every api/*.php file needs) has to be in the image
+# too.
+[phases.setup]
+nixPkgs = ["nodejs_20", "php82", "php82Extensions.pdo_mysql", "php82Extensions.mysqli"]

@@ -16,11 +16,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 // ─── includes/config.php ─────────────────────────────────────
 // Edit these values to match your XAMPP setup
-define('DB_HOST', 'localhost');
-define('DB_USER', 'root');        // XAMPP default
-define('DB_PASS', '');            // XAMPP default (empty)
-define('DB_NAME', 'sarms_db');
-define('DB_PORT', 3306);
+define('DB_HOST', getenv('MYSQLHOST') ?: 'localhost');
+define('DB_USER', getenv('MYSQLUSER') ?: 'root');
+define('DB_PASS', getenv('MYSQLPASSWORD') ?: '');
+define('DB_NAME', getenv('MYSQLDATABASE') ?: 'sarms_db');
+define('DB_PORT', getenv('MYSQLPORT') ?: 3306);
 
 define('BASE_URL',  'http://localhost/sarms');
 define('UPLOAD_DIR', __DIR__ . '/../uploads/');

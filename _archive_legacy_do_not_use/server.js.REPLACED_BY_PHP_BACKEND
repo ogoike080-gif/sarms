@@ -1,3 +1,7 @@
+// ARCHIVED 2026-08-30: Superseded by the PHP backend (api/*.php) served via router.php.
+// This Node/Express reimplementation was an incomplete partial port (no auth, most LMS
+// actions stubbed, missing tables) — kept here for reference only, not deployed.
+
 // ============================================================
 // SARMS — server.js (Extended with Calendar and LMS APIs)
 // Node.js/Express replacement for all PHP endpoints
