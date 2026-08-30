@@ -13,6 +13,6 @@
 
 return [
     'GEMINI_API_KEY' => 'your_api_key_here',
-    'GEMINI_MODEL'   => 'gemini-2.0-flash',
+    'GEMINI_MODEL'   => 'gemini-3.1-flash-lite',
     'MAX_OUTPUT_TOKENS' => 800,
 ];

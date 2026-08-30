@@ -339,7 +339,7 @@ function geminiConfig(): array {
         $apiKey = $local['GEMINI_API_KEY'] ?? null;
         $model  = $model ?: ($local['GEMINI_MODEL'] ?? null);
     }
-    $config = ['apiKey' => $apiKey, 'model' => $model ?: 'gemini-2.0-flash'];
+    $config = ['apiKey' => $apiKey, 'model' => $model ?: 'gemini-3.1-flash-lite'];
     return $config;
 }
 

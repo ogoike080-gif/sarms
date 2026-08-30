@@ -144,7 +144,7 @@ function geminiConfig(): array {
 
     $config = [
         'apiKey' => $apiKey,
-        'model'  => $model ?: 'gemini-2.0-flash',
+        'model'  => $model ?: 'gemini-3.1-flash-lite',
         'maxOutputTokens' => (int)($maxTok ?: 800),
     ];
     return $config;
