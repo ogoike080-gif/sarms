@@ -470,6 +470,13 @@ function ordinal(n) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
+// Matches "SS3", "SS 3", "SSS3", "SSS 3", with or without a stream suffix
+// like "SS3A" — used to decide when a student has reached the terminal
+// senior class and is eligible for an automatic transcript.
+function isSS3Class(name) {
+  return /\bS+S\s*3(?!\d)/i.test(name || "");
+}
+
 // ─── ICONS ────────────────────────────────────────────────────────────────────
 const Icon = ({ name, size = 18, color = "currentColor" }) => {
   const icons = {
@@ -4088,6 +4095,184 @@ function StudentsPage({ state, updateState, currentUser, showNotification }) {
     showNotification("Student removed.");
   };
 
+  // ── Transcript generation (Admin / Principal, SS3 students) ──────────
+  // Reconstructs each academic session's subject-by-subject annual
+  // averages purely from the score records themselves (score rows carry
+  // their own session/term/classId, so no separate class-history log is
+  // needed), then stitches every session found for this student into one
+  // printable multi-session transcript.
+  const generateTranscript = (student) => {
+    const allScores = state.scores.filter((s) => s.studentId === student.id);
+    if (allScores.length === 0) {
+      showNotification("This student has no recorded scores yet — nothing to put on a transcript.", "error");
+      return;
+    }
+    const TERM_LIST = ["First Term", "Second Term", "Third Term"];
+    const sessionsPresent = [...new Set(allScores.map((s) => s.session))].sort();
+
+    const sessionBlocks = sessionsPresent.map((session) => {
+      const sessionScores = allScores.filter((s) => s.session === session);
+      // The class this student was recorded under most often in this
+      // session (a student may occasionally have a stray row from a
+      // mid-session transfer — majority vote is the safe default).
+      const classCounts = {};
+      sessionScores.forEach((s) => { classCounts[s.classId] = (classCounts[s.classId] || 0) + 1; });
+      const sessionClassId = Object.keys(classCounts).sort((a, b) => classCounts[b] - classCounts[a])[0];
+      const sessionCls = state.classes.find((c) => c.id === sessionClassId);
+
+      const subjectIds = [...new Set(sessionScores.map((s) => s.subjectId))];
+      const subjectRows = subjectIds.map((sid) => {
+        const t1 = sessionScores.find((s) => s.subjectId === sid && s.term === "First Term");
+        const t2 = sessionScores.find((s) => s.subjectId === sid && s.term === "Second Term");
+        const t3 = sessionScores.find((s) => s.subjectId === sid && s.term === "Third Term");
+        const present = [t1, t2, t3].filter(Boolean);
+        const sum = present.reduce((a, s) => a + (s.ca || 0) + (s.exam || 0), 0);
+        const annualAvg = present.length > 0 ? Math.round((sum / 3) * 10) / 10 : 0;
+        const grade = getGrade(annualAvg, state.gradingSystem);
+        const subject = state.subjects.find((sb) => sb.id === sid);
+        return { name: subject?.name || "Unknown Subject", annualAvg, grade: grade.grade, remark: grade.remark, termsRecorded: present.length };
+      }).sort((a, b) => a.name.localeCompare(b.name));
+
+      const sessionAvg = subjectRows.length > 0
+        ? (subjectRows.reduce((a, r) => a + r.annualAvg, 0) / subjectRows.length).toFixed(1)
+        : "0.0";
+
+      return { session, className: sessionCls?.name || "—", subjectRows, sessionAvg };
+    });
+
+    const cumulativeAvg = (() => {
+      const allAvgs = sessionBlocks.flatMap((b) => b.subjectRows.map((r) => r.annualAvg));
+      return allAvgs.length > 0 ? (allAvgs.reduce((a, v) => a + v, 0) / allAvgs.length).toFixed(1) : "0.0";
+    })();
+
+    const finalSession = sessionsPresent[sessionsPresent.length - 1];
+
+    const sessionSections = sessionBlocks.map((b) => `
+      <div class="session-block">
+        <div class="session-header">
+          <span>${b.session}</span><span>${b.className}</span><span>Session Average: <strong>${b.sessionAvg}</strong></span>
+        </div>
+        <table>
+          <thead><tr><th style="text-align:left">Subject</th><th>Annual Avg</th><th>Grade</th><th>Remark</th></tr></thead>
+          <tbody>
+            ${b.subjectRows.map((r) => `
+              <tr>
+                <td style="text-align:left;font-weight:600">${r.name}${r.termsRecorded < 3 ? ` <span style="color:#999;font-size:10px">(${r.termsRecorded}/3 terms)</span>` : ""}</td>
+                <td style="font-weight:800;color:#1B3A8F">${r.annualAvg}</td>
+                <td style="font-weight:800;color:#1B3A8F">${r.grade}</td>
+                <td>${r.remark}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`).join("");
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/>
+<title>Transcript — ${student.name}</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Georgia',serif;background:#f5f7ff;padding:28px;color:#1a1a2e}
+  .page{background:white;max-width:800px;margin:0 auto;border-radius:12px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.15)}
+  .header{background:linear-gradient(135deg,#1B3A8F,#2563EB);color:white;padding:26px 30px;display:flex;align-items:center;gap:20px}
+  .logo{width:64px;height:64px;border-radius:50%;background:rgba(255,255,255,0.2);display:flex;align-items:center;justify-content:center;font-size:32px;flex-shrink:0;overflow:hidden}
+  .logo img{width:100%;height:100%;object-fit:cover}
+  .school-name{font-size:22px;font-weight:800;letter-spacing:0.02em}
+  .school-addr{font-size:12px;opacity:0.8;margin-top:4px}
+  .school-motto{font-size:11px;opacity:0.85;font-style:italic;margin-top:2px}
+  .banner{background:linear-gradient(90deg,#F59E0B,#D97706);color:#000;text-align:center;padding:9px;font-size:13px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase}
+  .body{padding:26px 30px}
+  .student-row{display:flex;gap:20px;margin-bottom:22px;align-items:flex-start}
+  .passport{width:90px;height:110px;border:3px solid #1B3A8F;border-radius:6px;overflow:hidden;background:#e8eaf6;display:flex;align-items:center;justify-content:center;font-size:40px;flex-shrink:0}
+  .passport img{width:100%;height:100%;object-fit:cover}
+  .info-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 20px;flex:1}
+  .info-item{display:flex;gap:6px;font-size:13px}
+  .info-label{font-weight:700;color:#333;min-width:110px}
+  .session-block{margin-bottom:20px}
+  .session-header{display:flex;justify-content:space-between;background:#1B3A8F;color:white;padding:8px 12px;border-radius:6px 6px 0 0;font-size:12px;font-weight:700}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{background:#e8edf8;color:#1B3A8F;padding:6px 8px;font-size:11px;text-align:center;border:1px solid #dce3f5}
+  th:first-child{text-align:left}
+  td{padding:6px 8px;border:1px solid #dce3f5;text-align:center}
+  td:first-child{text-align:left}
+  tr:nth-child(even) td{background:#f8f9ff}
+  .summary-box{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:20px 0}
+  .summary-item{background:#f0f4ff;border:1px solid #c7d4f5;border-radius:8px;padding:12px;text-align:center}
+  .summary-val{font-size:24px;font-weight:800;color:#1B3A8F}
+  .summary-lbl{font-size:10px;color:#666;text-transform:uppercase;letter-spacing:0.06em;margin-top:2px}
+  .footer-row{display:flex;justify-content:space-between;align-items:flex-end;margin-top:26px;padding-top:16px;border-top:2px solid #1B3A8F}
+  .sig-block{text-align:center}
+  .sig-img{height:50px;max-width:120px;object-fit:contain;display:block;margin:0 auto 4px}
+  .sig-line{border-top:1px solid #333;padding-top:4px;font-size:11px;color:#444}
+  .stamp{border:3px double #1B3A8F;border-radius:50%;width:80px;height:80px;display:flex;align-items:center;justify-content:center;color:#1B3A8F;font-size:9px;font-weight:700;text-align:center;padding:8px;line-height:1.3}
+  .disclaimer{text-align:center;font-size:10px;color:#aaa;margin-top:18px;border-top:1px solid #eee;padding-top:10px;line-height:1.5}
+  @media print{body{background:white;padding:0}.page{box-shadow:none;border-radius:0}}
+</style></head><body>
+<div class="page">
+  <div class="header">
+    <div class="logo">${state.institution.logo ? `<img src="${state.institution.logo}" alt="logo"/>` : "🏫"}</div>
+    <div>
+      <div class="school-name">${state.institution.name}</div>
+      <div class="school-addr">${state.institution.address}</div>
+      ${state.institution.motto ? `<div class="school-motto">"${state.institution.motto}"</div>` : ""}
+    </div>
+  </div>
+  <div class="banner">🎓 Official Academic Transcript</div>
+  <div class="body">
+    <div class="student-row">
+      <div class="passport">${student.avatar ? `<img src="${student.avatar}" alt="${student.name}"/>` : "👤"}</div>
+      <div class="info-grid">
+        <div class="info-item"><span class="info-label">Full Name:</span><strong>${student.name}</strong></div>
+        <div class="info-item"><span class="info-label">Student ID:</span>${student.studentId}</div>
+        <div class="info-item"><span class="info-label">Graduating Class:</span>${sessionBlocks[sessionBlocks.length - 1]?.className || "—"}</div>
+        <div class="info-item"><span class="info-label">Sessions Covered:</span>${sessionsPresent.join(", ")}</div>
+        <div class="info-item"><span class="info-label">Date Issued:</span>${new Date().toLocaleDateString()}</div>
+      </div>
+    </div>
+
+    <div class="summary-box">
+      <div class="summary-item"><div class="summary-val">${sessionsPresent.length}</div><div class="summary-lbl">Sessions on Record</div></div>
+      <div class="summary-item"><div class="summary-val" style="color:#1B3A8F">${cumulativeAvg}</div><div class="summary-lbl">Cumulative Average</div></div>
+      <div class="summary-item"><div class="summary-val" style="color:${getGrade(Number(cumulativeAvg), state.gradingSystem).grade === 'A' ? '#10B981' : '#1B3A8F'}">${getGrade(Number(cumulativeAvg), state.gradingSystem).grade}</div><div class="summary-lbl">Overall Grade</div></div>
+    </div>
+
+    ${sessionSections}
+
+    ${state.institution.principalComment ? `
+    <div style="background:#f0f4ff;border-left:4px solid #1B3A8F;padding:10px 14px;border-radius:0 8px 8px 0;font-style:italic;font-size:13px;color:#333;margin-top:14px">
+      <strong>Principal's Note:</strong> ${state.institution.principalComment}
+    </div>` : ""}
+
+    <div class="footer-row">
+      <div class="sig-block">
+        <div style="height:50px;display:flex;align-items:flex-end;justify-content:center;margin-bottom:4px">
+          <div style="width:100px;border-bottom:1px solid #333"></div>
+        </div>
+        <div class="sig-line">Registrar / Admin Office</div>
+      </div>
+      <div class="stamp">
+        <div>${state.institution.name.split(" ").map(w => w[0]).join("").slice(0, 4)}<br/>OFFICIAL<br/>STAMP</div>
+      </div>
+      <div class="sig-block">
+        ${state.institution.signature ? `<img class="sig-img" src="${state.institution.signature}" alt="Principal Signature"/>` : `<div style="height:50px;display:flex;align-items:flex-end;justify-content:center;margin-bottom:4px"><div style="width:120px;border-bottom:1px solid #333"></div></div>`}
+        <div class="sig-line">${state.institution.principal}<br/><span style="color:#888">Principal</span></div>
+      </div>
+    </div>
+
+    <div class="disclaimer">
+      This is a computer-generated academic transcript compiled by SARMS from ${state.institution.name}'s own
+      records, current as of ${new Date().toLocaleDateString()}. It is not a WAEC / NECO certificate and does
+      not replace one. Any alteration renders this document invalid.
+    </div>
+  </div>
+</div>
+<script>window.onload=()=>window.print()</script>
+</body></html>`;
+
+    const blob = new Blob([html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  };
+
   return (
     <div>
       <div className="section-header">
@@ -4336,6 +4521,15 @@ function StudentsPage({ state, updateState, currentUser, showNotification }) {
                     </td>
                     <td>
                       <div style={{ display: "flex", gap: 6 }}>
+                        {(currentUser.role === "admin" || currentUser.role === "principal") && isSS3Class(cls?.name) && (
+                          <button
+                            className="btn btn-gold btn-sm"
+                            onClick={() => generateTranscript(s)}
+                            title="Generate full academic transcript"
+                          >
+                            <Icon name="download" size={14} /> Transcript
+                          </button>
+                        )}
                         <button
                           className="btn btn-secondary btn-sm btn-icon"
                           onClick={() => {
