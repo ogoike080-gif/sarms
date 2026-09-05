@@ -10364,17 +10364,26 @@ function TeacherGateCheckin({ currentUser, gateCode, markAttendance, getRecord, 
   return (
     <div className="card" style={{ marginBottom: 16, padding: "16px 18px", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
       <div style={{ fontWeight: 700, fontSize: 14 }}>📷 Scan the gate code to check in</div>
-      <div
-        id={scannerBoxId}
-        style={{
-          width: "100%", maxWidth: 360, minHeight: scanning ? "auto" : 160,
-          borderRadius: 12, overflow: "hidden", background: "#000",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          border: `2px dashed ${scanning ? COLORS.blue : COLORS.border}`,
-        }}
-      >
+      {/* Wrapper is the only thing React re-renders; the inner #scannerBoxId
+          div is left completely empty in JSX forever, so html5-qrcode owns
+          its children exclusively — React never tries to diff/remove a node
+          the library has already swapped out from under it (that mismatch
+          is what throws "removeChild ... not a child of this node" and
+          makes the camera flash open then immediately die). */}
+      <div style={{ position: "relative", width: "100%", maxWidth: 360, minHeight: scanning ? "auto" : 160 }}>
+        <div
+          id={scannerBoxId}
+          style={{
+            width: "100%", minHeight: scanning ? "auto" : 160,
+            borderRadius: 12, overflow: "hidden", background: "#000",
+            border: `2px dashed ${scanning ? COLORS.blue : COLORS.border}`,
+          }}
+        />
         {!scanning && (
-          <div style={{ color: COLORS.textMuted, fontSize: 12, textAlign: "center", padding: 16 }}>
+          <div style={{
+            position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+            color: COLORS.textMuted, fontSize: 12, textAlign: "center", padding: 16, pointerEvents: "none",
+          }}>
             Point your camera at the code posted at the gate.
           </div>
         )}
