@@ -495,6 +495,26 @@ const Icon = ({ name, size = 18, color = "currentColor" }) => {
         <rect x="14" y="14" width="7" height="7" rx="1" />
       </svg>
     ),
+    qrcode: (
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke={color}
+        strokeWidth="2"
+      >
+        <rect x="3" y="3" width="7" height="7" rx="1" />
+        <rect x="14" y="3" width="7" height="7" rx="1" />
+        <rect x="3" y="14" width="7" height="7" rx="1" />
+        <line x1="14" y1="14" x2="14" y2="17" />
+        <line x1="14" y1="20" x2="14" y2="21" />
+        <line x1="17" y1="14" x2="21" y2="14" />
+        <line x1="17" y1="17" x2="21" y2="17" />
+        <line x1="17" y1="20" x2="21" y2="20" />
+        <line x1="20" y1="14" x2="20" y2="21" />
+      </svg>
+    ),
     users: (
       <svg
         width={size}
@@ -4700,6 +4720,76 @@ function TeachersPage({ state, updateState, currentUser, showNotification }) {
     showNotification(`${role.charAt(0).toUpperCase() + role.slice(1)} deleted.`);
   };
 
+  // ── Gate ID badge (barcode-based attendance) ──────────────────────────
+  // The barcode encodes the teacher's own user id — the same id the Gate
+  // Scanner (Attendance page) looks up against, so nothing extra needs to
+  // be stored per teacher. jsbarcode is lazy-loaded (like xlsx elsewhere
+  // in this file) since only this one action needs it.
+  const printBadge = (teacher) => {
+    import("jsbarcode").then(({ default: JsBarcode }) => {
+      const canvas = document.createElement("canvas");
+      try {
+        JsBarcode(canvas, teacher.id, {
+          format: "CODE128", displayValue: false, margin: 6, height: 70, width: 2.4,
+        });
+      } catch (e) {
+        showNotification("Couldn't generate barcode: " + e.message, "error");
+        return;
+      }
+      const barcodeDataUrl = canvas.toDataURL("image/png");
+
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/>
+<title>ID Badge — ${teacher.name}</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Georgia',serif;background:#f5f7ff;padding:28px;display:flex;justify-content:center}
+  .badge{width:340px;background:white;border-radius:16px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,0.2);border:1px solid #dce3f5}
+  .badge-header{background:linear-gradient(135deg,#1B3A8F,#2563EB);color:white;padding:16px 18px;display:flex;align-items:center;gap:12px}
+  .badge-logo{width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,0.2);display:flex;align-items:center;justify-content:center;font-size:20px;overflow:hidden;flex-shrink:0}
+  .badge-logo img{width:100%;height:100%;object-fit:cover}
+  .badge-school{font-size:13px;font-weight:800}
+  .badge-sub{font-size:9px;opacity:0.8;text-transform:uppercase;letter-spacing:0.08em}
+  .badge-body{padding:20px;text-align:center}
+  .badge-photo{width:96px;height:96px;border-radius:50%;border:3px solid #1B3A8F;margin:0 auto 12px;overflow:hidden;background:#e8eaf6;display:flex;align-items:center;justify-content:center;font-size:40px}
+  .badge-photo img{width:100%;height:100%;object-fit:cover}
+  .badge-name{font-size:17px;font-weight:800;color:#1a1a2e}
+  .badge-role{font-size:11px;color:#F59E0B;text-transform:uppercase;letter-spacing:0.1em;font-weight:700;margin-top:2px}
+  .badge-email{font-size:11px;color:#777;margin-top:6px}
+  .badge-barcode{margin-top:16px;padding:10px;background:#fafbff;border-top:1px dashed #ccd6f0}
+  .badge-barcode img{width:100%;height:auto}
+  .badge-id{font-size:10px;color:#999;letter-spacing:0.05em;margin-top:4px}
+  .badge-footer{background:#f0f4ff;padding:8px;text-align:center;font-size:9px;color:#888}
+  @media print{body{background:white}.badge{box-shadow:none;border:1px solid #ccc}}
+</style></head><body>
+<div class="badge">
+  <div class="badge-header">
+    <div class="badge-logo">${state.institution.logo ? `<img src="${state.institution.logo}" alt="logo"/>` : "🏫"}</div>
+    <div>
+      <div class="badge-school">${state.institution.name}</div>
+      <div class="badge-sub">Staff ID Card</div>
+    </div>
+  </div>
+  <div class="badge-body">
+    <div class="badge-photo">${teacher.avatar ? `<img src="${teacher.avatar}" alt="${teacher.name}"/>` : "👤"}</div>
+    <div class="badge-name">${teacher.name}</div>
+    <div class="badge-role">Teacher</div>
+    <div class="badge-email">${teacher.email}</div>
+    <div class="badge-barcode">
+      <img src="${barcodeDataUrl}" alt="barcode"/>
+      <div class="badge-id">Scan at the gate to mark attendance</div>
+    </div>
+  </div>
+  <div class="badge-footer">Property of ${state.institution.name} · Report if found</div>
+</div>
+<script>window.onload=()=>window.print()</script>
+</body></html>`;
+      const blob = new Blob([html], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    }).catch(() => showNotification("Couldn't load the barcode library. Check your connection and try again.", "error"));
+  };
+
   return (
     <div>
       <div className="section-header">
@@ -4765,6 +4855,13 @@ function TeachersPage({ state, updateState, currentUser, showNotification }) {
                   </td>
                   <td>
                     <div style={{ display: "flex", gap: 6 }}>
+                      <button
+                        className="btn btn-gold btn-sm btn-icon"
+                        title="Print gate ID badge (barcode)"
+                        onClick={() => printBadge(t)}
+                      >
+                        <Icon name="qrcode" size={14} />
+                      </button>
                       <button
                         className="btn btn-secondary btn-sm btn-icon"
                         onClick={() => {
@@ -10155,6 +10252,170 @@ function PaymentsPage({ state, updateState, currentUser, showNotification }) {
 
 
 // ─── ATTENDANCE PAGE ──────────────────────────────────────────────────────────
+// ─── GATE SCANNER (barcode-based attendance check-in) ─────────────────────
+// Runs the device camera through html5-qrcode (lazy-loaded, same pattern as
+// xlsx/jsbarcode elsewhere in this file) to read the CODE128 barcode printed
+// on each teacher's gate ID badge (see printBadge in TeachersPage — it
+// encodes the teacher's own user id). A successful read marks that teacher
+// Present for the selected date, the same as clicking the button by hand.
+function GateScannerPanel({ teachers, getRecord, markAttendance, date, setDate, today, showNotification }) {
+  const scannerBoxId = "sarms-gate-scanner-box";
+  const scannerRef = useRef(null);   // holds the live Html5Qrcode instance
+  const cooldownRef = useRef({});    // { teacherId: timestampOfLastScan } — stops rapid re-reads of a badge held in frame
+  const [scanning, setScanning] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [cameraError, setCameraError] = useState("");
+  const [lastResult, setLastResult] = useState(null); // { ok, name, avatar, time } | { ok:false, message }
+
+  const stopScanning = () => {
+    const instance = scannerRef.current;
+    scannerRef.current = null;
+    setScanning(false);
+    if (instance) {
+      instance.stop().then(() => instance.clear()).catch(() => {});
+    }
+  };
+
+  // Always release the camera when leaving this tab/page — leaving it
+  // running in the background is exactly the kind of thing that silently
+  // breaks the next attempt to open it ("camera already in use").
+  useEffect(() => () => stopScanning(), []);
+
+  const handleDecoded = (decodedText) => {
+    const now = Date.now();
+    const lastSeen = cooldownRef.current[decodedText] || 0;
+    if (now - lastSeen < 8000) return; // ignore the same badge re-firing while still in frame
+    cooldownRef.current[decodedText] = now;
+
+    const teacher = teachers.find((t) => t.id === decodedText);
+    if (!teacher) {
+      setLastResult({ ok: false, message: "Badge not recognized — this code doesn't match any teacher on file." });
+      return;
+    }
+    const existing = getRecord(teacher.id);
+    if (existing && existing.status === "Present" && existing.date === date) {
+      setLastResult({ ok: true, name: teacher.name, avatar: teacher.avatar, time: existing.timeIn, already: true });
+      return;
+    }
+    markAttendance(teacher.id, "Present");
+    setLastResult({ ok: true, name: teacher.name, avatar: teacher.avatar, time: new Date().toTimeString().slice(0, 5) });
+  };
+
+  const startScanning = () => {
+    setCameraError("");
+    setStarting(true);
+    import("html5-qrcode").then(({ Html5Qrcode, Html5QrcodeSupportedFormats }) => {
+      const instance = new Html5Qrcode(scannerBoxId, {
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.QR_CODE, // in case a school prefers printing QR instead
+        ],
+        verbose: false,
+      });
+      scannerRef.current = instance;
+      instance.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 260, height: 140 } },
+        (decodedText) => handleDecoded(decodedText),
+        () => {} // per-frame "nothing found" callback — fires constantly, intentionally ignored
+      ).then(() => {
+        setScanning(true);
+        setStarting(false);
+      }).catch((err) => {
+        setStarting(false);
+        setCameraError(
+          "Couldn't access the camera. Make sure you allow camera access for this site " +
+          "(and that you're on HTTPS), then try again. Details: " + (err?.message || err)
+        );
+        scannerRef.current = null;
+      });
+    }).catch(() => {
+      setStarting(false);
+      setCameraError("Couldn't load the scanner library. Check your connection and try again.");
+    });
+  };
+
+  return (
+    <div>
+      <div className="card" style={{ marginBottom: 16, padding: "14px 18px" }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <label className="form-label" style={{ marginBottom: 4 }}>Recording attendance for</label>
+            <input type="date" className="form-input" value={date} max={today}
+              onChange={(e) => { if (scanning) stopScanning(); setDate(e.target.value); }}
+              style={{ maxWidth: 200 }} />
+          </div>
+          {!scanning ? (
+            <button className="btn btn-primary" onClick={startScanning} disabled={starting}>
+              <Icon name="qrcode" size={16} /> {starting ? "Starting camera…" : "Start Gate Scanner"}
+            </button>
+          ) : (
+            <button className="btn btn-danger" onClick={stopScanning}>Stop Scanner</button>
+          )}
+        </div>
+      </div>
+
+      <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, padding: 24 }}>
+        <div
+          id={scannerBoxId}
+          style={{
+            width: "100%", maxWidth: 420, minHeight: scanning ? "auto" : 220,
+            borderRadius: 14, overflow: "hidden", background: "#000",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            border: `2px dashed ${scanning ? COLORS.blue : COLORS.border}`,
+          }}
+        >
+          {!scanning && (
+            <div style={{ color: COLORS.textMuted, fontSize: 13, textAlign: "center", padding: 20 }}>
+              📷 Camera preview appears here once scanning starts.<br />Hold a teacher's gate ID badge up to the camera.
+            </div>
+          )}
+        </div>
+
+        {cameraError && (
+          <div style={{ color: COLORS.rose, fontSize: 13, textAlign: "center", maxWidth: 420 }}>{cameraError}</div>
+        )}
+
+        {lastResult && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 14, padding: "12px 20px", borderRadius: 12, width: "100%", maxWidth: 420,
+            background: lastResult.ok ? "rgba(16,185,129,0.1)" : "rgba(244,63,94,0.1)",
+            border: `1px solid ${lastResult.ok ? "rgba(16,185,129,0.3)" : "rgba(244,63,94,0.3)"}`,
+          }}>
+            {lastResult.ok ? (
+              <>
+                <div style={{
+                  width: 44, height: 44, borderRadius: "50%", overflow: "hidden", flexShrink: 0,
+                  background: lastResult.avatar ? "transparent" : "linear-gradient(135deg,var(--blue),var(--indigo))",
+                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
+                }}>
+                  {lastResult.avatar ? <img src={lastResult.avatar} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "👤"}
+                </div>
+                <div>
+                  <div style={{ fontWeight: 700, color: COLORS.emerald }}>
+                    {lastResult.already ? `${lastResult.name} — already checked in` : `✅ ${lastResult.name} checked in`}
+                  </div>
+                  <div style={{ fontSize: 12, color: COLORS.textMuted }}>Time: {lastResult.time}</div>
+                </div>
+              </>
+            ) : (
+              <div style={{ color: COLORS.rose, fontSize: 13 }}>⚠️ {lastResult.message}</div>
+            )}
+          </div>
+        )}
+
+        <div style={{ fontSize: 12, color: COLORS.textMuted, textAlign: "center", maxWidth: 420 }}>
+          Each teacher's gate ID badge (printed from Staff Management) carries a barcode.
+          Scans update this attendance register instantly — the same one admin and the principal see.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function AttendancePage({ state, updateState, currentUser, showNotification }) {
   const today = new Date().toISOString().split("T")[0];
   const [date, setDate]           = useState(today);
@@ -10306,9 +10567,23 @@ function AttendancePage({ state, updateState, currentUser, showNotification }) {
 
       <div className="tabs">
         <div className={`tab ${tab==="mark"?"active":""}`}    onClick={()=>setTab("mark")}>📋 Mark Attendance</div>
+        {isPrincipal && <div className={`tab ${tab==="scan"?"active":""}`} onClick={()=>setTab("scan")}>📷 Gate Scan</div>}
         <div className={`tab ${tab==="history"?"active":""}`} onClick={()=>setTab("history")}>📅 History</div>
         {isPrincipal && <div className={`tab ${tab==="report"?"active":""}`} onClick={()=>setTab("report")}>📊 Report</div>}
       </div>
+
+      {/* ── GATE SCAN TAB ── */}
+      {tab === "scan" && isPrincipal && (
+        <GateScannerPanel
+          teachers={teachers}
+          getRecord={getRecord}
+          markAttendance={markAttendance}
+          date={date}
+          setDate={setDate}
+          today={today}
+          showNotification={showNotification}
+        />
+      )}
 
       {/* ── MARK TAB ── */}
       {tab === "mark" && (
