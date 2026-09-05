@@ -4737,11 +4737,12 @@ function TeachersPage({ state, updateState, currentUser, showNotification }) {
     showNotification(`${role.charAt(0).toUpperCase() + role.slice(1)} deleted.`);
   };
 
-  // ── Gate ID badge (barcode-based attendance) ──────────────────────────
-  // The barcode encodes the teacher's own user id — the same id the Gate
-  // Scanner (Attendance page) looks up against, so nothing extra needs to
-  // be stored per teacher. jsbarcode is lazy-loaded (like xlsx elsewhere
-  // in this file) since only this one action needs it.
+  // ── Staff ID badge ──────────────────────────────────────────────────
+  // A general-purpose printable ID card. Note: attendance check-in no
+  // longer uses this badge's barcode — see the single rotating gate code
+  // under Attendance → Gate Code, which every teacher scans from their
+  // own "My Attendance" page instead. jsbarcode is lazy-loaded (like xlsx
+  // elsewhere in this file) since only this one action needs it.
   const printBadge = (teacher) => {
     import("jsbarcode").then(({ default: JsBarcode }) => {
       const canvas = document.createElement("canvas");
@@ -4793,7 +4794,7 @@ function TeachersPage({ state, updateState, currentUser, showNotification }) {
     <div class="badge-email">${teacher.email}</div>
     <div class="badge-barcode">
       <img src="${barcodeDataUrl}" alt="barcode"/>
-      <div class="badge-id">Scan at the gate to mark attendance</div>
+      <div class="badge-id">Staff identification card</div>
     </div>
   </div>
   <div class="badge-footer">Property of ${state.institution.name} · Report if found</div>
@@ -4874,7 +4875,7 @@ function TeachersPage({ state, updateState, currentUser, showNotification }) {
                     <div style={{ display: "flex", gap: 6 }}>
                       <button
                         className="btn btn-gold btn-sm btn-icon"
-                        title="Print gate ID badge (barcode)"
+                        title="Print staff ID card"
                         onClick={() => printBadge(t)}
                       >
                         <Icon name="qrcode" size={14} />
@@ -10377,192 +10378,44 @@ function TeacherGateCheckin({ currentUser, gateCode, markAttendance, getRecord, 
   );
 }
 
-function GateScannerPanel({ teachers, getRecord, markAttendance, date, setDate, today, showNotification, gateCode, regenerateGateCode, printGatePoster }) {
-  const scannerBoxId = "sarms-gate-scanner-box";
-  const scannerRef = useRef(null);   // holds the live Html5Qrcode instance
-  const cooldownRef = useRef({});    // { teacherId: timestampOfLastScan } — stops rapid re-reads of a badge held in frame
-  const [scanning, setScanning] = useState(false);
-  const [starting, setStarting] = useState(false);
-  const [cameraError, setCameraError] = useState("");
-  const [lastResult, setLastResult] = useState(null); // { ok, name, avatar, time } | { ok:false, message }
-
-  const stopScanning = () => {
-    const instance = scannerRef.current;
-    scannerRef.current = null;
-    setScanning(false);
-    if (instance) {
-      instance.stop().then(() => instance.clear()).catch(() => {});
-    }
-  };
-
-  // Always release the camera when leaving this tab/page — leaving it
-  // running in the background is exactly the kind of thing that silently
-  // breaks the next attempt to open it ("camera already in use").
-  useEffect(() => () => stopScanning(), []);
-
-  const handleDecoded = (decodedText) => {
-    const now = Date.now();
-    const lastSeen = cooldownRef.current[decodedText] || 0;
-    if (now - lastSeen < 8000) return; // ignore the same badge re-firing while still in frame
-    cooldownRef.current[decodedText] = now;
-
-    const teacher = teachers.find((t) => t.id === decodedText);
-    if (!teacher) {
-      setLastResult({ ok: false, message: "Badge not recognized — this code doesn't match any teacher on file." });
-      return;
-    }
-    const existing = getRecord(teacher.id);
-    if (existing && existing.status === "Present" && existing.date === date) {
-      setLastResult({ ok: true, name: teacher.name, avatar: teacher.avatar, time: existing.timeIn, already: true });
-      return;
-    }
-    markAttendance(teacher.id, "Present");
-    setLastResult({ ok: true, name: teacher.name, avatar: teacher.avatar, time: new Date().toTimeString().slice(0, 5) });
-  };
-
-  const startScanning = () => {
-    setCameraError("");
-    setStarting(true);
-    import("html5-qrcode").then(({ Html5Qrcode, Html5QrcodeSupportedFormats }) => {
-      const instance = new Html5Qrcode(scannerBoxId, {
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.CODE_39,
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.QR_CODE, // in case a school prefers printing QR instead
-        ],
-        verbose: false,
-      });
-      scannerRef.current = instance;
-      instance.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 260, height: 140 } },
-        (decodedText) => handleDecoded(decodedText),
-        () => {} // per-frame "nothing found" callback — fires constantly, intentionally ignored
-      ).then(() => {
-        setScanning(true);
-        setStarting(false);
-      }).catch((err) => {
-        setStarting(false);
-        setCameraError(
-          "Couldn't access the camera. Make sure you allow camera access for this site " +
-          "(and that you're on HTTPS), then try again. Details: " + (err?.message || err)
-        );
-        scannerRef.current = null;
-      });
-    }).catch(() => {
-      setStarting(false);
-      setCameraError("Couldn't load the scanner library. Check your connection and try again.");
-    });
-  };
-
+// ─── GATE CODE MANAGER (admin/principal) ───────────────────────────────────
+// One rotating code, printed as a single poster at the gate. Every teacher
+// scans this same code from their own phone (see TeacherGateCheckin above)
+// — there is deliberately no per-teacher scanning mechanism here, so there
+// is only ever one place to look and one thing to regenerate.
+function GateCodeManagerPanel({ gateCode, regenerateGateCode, printGatePoster }) {
   return (
-    <div>
-      {/* Rotating gate code — the primary self check-in method: teachers
-          scan this from their OWN Attendance page with their own phone. */}
-      <div className="card" style={{ marginBottom: 16, padding: "16px 18px" }}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>🎫 Teacher Self Check-In Code</div>
-        <div style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 12 }}>
-          Print this and post it at the gate. Teachers scan it themselves from their own "My Attendance" page —
-          no staff device needed. Regenerate anytime to instantly invalidate any old photo/screenshot of it.
-        </div>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ fontSize: 12, color: COLORS.textSecondary }}>
-            {gateCode?.token ? (
-              <>Current code: <strong style={{ color: COLORS.blueLight, fontFamily: "monospace" }}>{gateCode.token}</strong>
-                <br />Generated {new Date(gateCode.generatedAt).toLocaleString()} by {gateCode.generatedByName}</>
-            ) : "No gate code generated yet."}
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn btn-secondary" onClick={printGatePoster} disabled={!gateCode?.token}>
-              <Icon name="download" size={16} /> Print Poster
-            </button>
-            <button className="btn btn-gold" onClick={regenerateGateCode}>
-              🔄 {gateCode?.token ? "Regenerate Code" : "Generate Code"}
-            </button>
-          </div>
-        </div>
+    <div className="card" style={{ padding: "20px 22px" }}>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>🎫 Teacher Gate Check-In Code</div>
+      <div style={{ fontSize: 13, color: COLORS.textMuted, marginBottom: 16, lineHeight: 1.5 }}>
+        Print this once and post it at the school gate. Every teacher scans the same code with their own
+        phone, from their own "My Attendance" page, to check themselves in — no staff device needed at the
+        gate. Regenerate it anytime (e.g. every morning) to instantly invalidate any old photo or printout.
       </div>
-
-      <div style={{ fontWeight: 700, fontSize: 14, margin: "20px 0 4px" }}>📷 Alternative: Staffed Scanning Device</div>
-      <div style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 12 }}>
-        For schools that prefer a dedicated device at the gate instead — this scans each teacher's own printed ID badge.
-      </div>
-      <div className="card" style={{ marginBottom: 16, padding: "14px 18px" }}>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
-          <div>
-            <label className="form-label" style={{ marginBottom: 4 }}>Recording attendance for</label>
-            <input type="date" className="form-input" value={date} max={today}
-              onChange={(e) => { if (scanning) stopScanning(); setDate(e.target.value); }}
-              style={{ maxWidth: 200 }} />
-          </div>
-          {!scanning ? (
-            <button className="btn btn-primary" onClick={startScanning} disabled={starting}>
-              <Icon name="qrcode" size={16} /> {starting ? "Starting camera…" : "Start Gate Scanner"}
-            </button>
-          ) : (
-            <button className="btn btn-danger" onClick={stopScanning}>Stop Scanner</button>
-          )}
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 13, color: COLORS.textSecondary }}>
+          {gateCode?.token ? (
+            <>
+              Current code: <strong style={{ color: COLORS.blueLight, fontFamily: "monospace", fontSize: 15 }}>{gateCode.token}</strong>
+              <div style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 4 }}>
+                Generated {new Date(gateCode.generatedAt).toLocaleString()} by {gateCode.generatedByName}
+              </div>
+            </>
+          ) : "No gate code generated yet — click below to create one."}
         </div>
-      </div>
-
-      <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, padding: 24 }}>
-        <div
-          id={scannerBoxId}
-          style={{
-            width: "100%", maxWidth: 420, minHeight: scanning ? "auto" : 220,
-            borderRadius: 14, overflow: "hidden", background: "#000",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            border: `2px dashed ${scanning ? COLORS.blue : COLORS.border}`,
-          }}
-        >
-          {!scanning && (
-            <div style={{ color: COLORS.textMuted, fontSize: 13, textAlign: "center", padding: 20 }}>
-              📷 Camera preview appears here once scanning starts.<br />Hold a teacher's gate ID badge up to the camera.
-            </div>
-          )}
-        </div>
-
-        {cameraError && (
-          <div style={{ color: COLORS.rose, fontSize: 13, textAlign: "center", maxWidth: 420 }}>{cameraError}</div>
-        )}
-
-        {lastResult && (
-          <div style={{
-            display: "flex", alignItems: "center", gap: 14, padding: "12px 20px", borderRadius: 12, width: "100%", maxWidth: 420,
-            background: lastResult.ok ? "rgba(16,185,129,0.1)" : "rgba(244,63,94,0.1)",
-            border: `1px solid ${lastResult.ok ? "rgba(16,185,129,0.3)" : "rgba(244,63,94,0.3)"}`,
-          }}>
-            {lastResult.ok ? (
-              <>
-                <div style={{
-                  width: 44, height: 44, borderRadius: "50%", overflow: "hidden", flexShrink: 0,
-                  background: lastResult.avatar ? "transparent" : "linear-gradient(135deg,var(--blue),var(--indigo))",
-                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18,
-                }}>
-                  {lastResult.avatar ? <img src={lastResult.avatar} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "👤"}
-                </div>
-                <div>
-                  <div style={{ fontWeight: 700, color: COLORS.emerald }}>
-                    {lastResult.already ? `${lastResult.name} — already checked in` : `✅ ${lastResult.name} checked in`}
-                  </div>
-                  <div style={{ fontSize: 12, color: COLORS.textMuted }}>Time: {lastResult.time}</div>
-                </div>
-              </>
-            ) : (
-              <div style={{ color: COLORS.rose, fontSize: 13 }}>⚠️ {lastResult.message}</div>
-            )}
-          </div>
-        )}
-
-        <div style={{ fontSize: 12, color: COLORS.textMuted, textAlign: "center", maxWidth: 420 }}>
-          Each teacher's gate ID badge (printed from Staff Management) carries a barcode.
-          Scans update this attendance register instantly — the same one admin and the principal see.
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-secondary" onClick={printGatePoster} disabled={!gateCode?.token}>
+            <Icon name="download" size={16} /> Print Poster
+          </button>
+          <button className="btn btn-gold" onClick={regenerateGateCode}>
+            🔄 {gateCode?.token ? "Regenerate Code" : "Generate Code"}
+          </button>
         </div>
       </div>
     </div>
   );
 }
+
 
 
 function AttendancePage({ state, updateState, currentUser, showNotification }) {
@@ -10786,21 +10639,14 @@ function AttendancePage({ state, updateState, currentUser, showNotification }) {
 
       <div className="tabs">
         <div className={`tab ${tab==="mark"?"active":""}`}    onClick={()=>setTab("mark")}>📋 Mark Attendance</div>
-        {isPrincipal && <div className={`tab ${tab==="scan"?"active":""}`} onClick={()=>setTab("scan")}>📷 Gate Scan</div>}
+        {isPrincipal && <div className={`tab ${tab==="scan"?"active":""}`} onClick={()=>setTab("scan")}>🎫 Gate Code</div>}
         <div className={`tab ${tab==="history"?"active":""}`} onClick={()=>setTab("history")}>📅 History</div>
         {isPrincipal && <div className={`tab ${tab==="report"?"active":""}`} onClick={()=>setTab("report")}>📊 Report</div>}
       </div>
 
-      {/* ── GATE SCAN TAB ── */}
+      {/* ── GATE CODE TAB ── */}
       {tab === "scan" && isPrincipal && (
-        <GateScannerPanel
-          teachers={teachers}
-          getRecord={getRecord}
-          markAttendance={markAttendance}
-          date={date}
-          setDate={setDate}
-          today={today}
-          showNotification={showNotification}
+        <GateCodeManagerPanel
           gateCode={state.gateCode}
           regenerateGateCode={regenerateGateCode}
           printGatePoster={printGatePoster}
