@@ -31,9 +31,15 @@ const INITIAL_STATE = {
     address: "",
     principal: "",
     principalComment: "",
+    motto: "",
     logo: null,
     signature: null,
   },
+  // Rotating gate check-in code — posted physically at the school gate,
+  // NOT tied to any one teacher. Teachers scan it with their own phone to
+  // check themselves in. Admin/principal can regenerate it anytime, which
+  // instantly invalidates any old screenshot someone may have saved.
+  gateCode: { token: "", generatedAt: "", generatedByName: "" },
   sessions: ["2024/2025"],
   currentSession: "2024/2025",
   terms: ["First Term", "Second Term", "Third Term"],
@@ -461,6 +467,17 @@ function generatePinCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "GFA-";
   for (let i = 0; i < 5; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+// Rotating gate check-in token — deliberately longer/more random than the
+// PIN codes above, since this one gets printed on a public poster: anyone
+// walking past could photograph it, so it needs to be cheap to rotate
+// rather than hard to guess.
+function generateGateToken() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "GATE-";
+  for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
   return code;
 }
 
@@ -10258,7 +10275,109 @@ function PaymentsPage({ state, updateState, currentUser, showNotification }) {
 // on each teacher's gate ID badge (see printBadge in TeachersPage — it
 // encodes the teacher's own user id). A successful read marks that teacher
 // Present for the selected date, the same as clicking the button by hand.
-function GateScannerPanel({ teachers, getRecord, markAttendance, date, setDate, today, showNotification }) {
+// ─── TEACHER SELF CHECK-IN (scans the gate poster with their own camera) ───
+function TeacherGateCheckin({ currentUser, gateCode, markAttendance, getRecord, date, showNotification }) {
+  const scannerBoxId = "sarms-teacher-checkin-box";
+  const scannerRef = useRef(null);
+  const [scanning, setScanning] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [cameraError, setCameraError] = useState("");
+
+  const existing = getRecord(currentUser.id);
+  const alreadyIn = existing && (existing.status === "Present" || existing.status === "Late") && existing.date === date;
+
+  const stopScanning = () => {
+    const instance = scannerRef.current;
+    scannerRef.current = null;
+    setScanning(false);
+    if (instance) instance.stop().then(() => instance.clear()).catch(() => {});
+  };
+
+  useEffect(() => () => stopScanning(), []);
+
+  const handleDecoded = (decodedText) => {
+    if (!gateCode?.token) return;
+    if (decodedText !== gateCode.token) {
+      showNotification("That code doesn't match today's gate code — ask the office if it was just changed.", "error");
+      return;
+    }
+    stopScanning();
+    markAttendance(currentUser.id, "Present");
+  };
+
+  const startScanning = () => {
+    setCameraError("");
+    setStarting(true);
+    import("html5-qrcode").then(({ Html5Qrcode, Html5QrcodeSupportedFormats }) => {
+      const instance = new Html5Qrcode(scannerBoxId, {
+        formatsToSupport: [Html5QrcodeSupportedFormats.CODE_128, Html5QrcodeSupportedFormats.QR_CODE],
+        verbose: false,
+      });
+      scannerRef.current = instance;
+      instance.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 250, height: 130 } },
+        (decodedText) => handleDecoded(decodedText),
+        () => {}
+      ).then(() => { setScanning(true); setStarting(false); })
+        .catch((err) => {
+          setStarting(false);
+          setCameraError("Couldn't access the camera — allow camera permission for this site and try again. (" + (err?.message || err) + ")");
+          scannerRef.current = null;
+        });
+    }).catch(() => { setStarting(false); setCameraError("Couldn't load the scanner. Check your connection and try again."); });
+  };
+
+  if (alreadyIn) {
+    return (
+      <div className="card" style={{ marginBottom: 16, padding: "14px 18px", background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.25)" }}>
+        <div style={{ fontWeight: 700, color: COLORS.emerald }}>✅ You're checked in for today</div>
+        <div style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 2 }}>Time in: {existing.timeIn}</div>
+      </div>
+    );
+  }
+
+  if (!gateCode?.token) {
+    return (
+      <div className="card" style={{ marginBottom: 16, padding: "14px 18px" }}>
+        <div style={{ fontSize: 13, color: COLORS.textMuted }}>
+          Gate check-in isn't set up yet — ask your admin/principal to generate a gate code first.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 16, padding: "16px 18px", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+      <div style={{ fontWeight: 700, fontSize: 14 }}>📷 Scan the gate code to check in</div>
+      <div
+        id={scannerBoxId}
+        style={{
+          width: "100%", maxWidth: 360, minHeight: scanning ? "auto" : 160,
+          borderRadius: 12, overflow: "hidden", background: "#000",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          border: `2px dashed ${scanning ? COLORS.blue : COLORS.border}`,
+        }}
+      >
+        {!scanning && (
+          <div style={{ color: COLORS.textMuted, fontSize: 12, textAlign: "center", padding: 16 }}>
+            Point your camera at the code posted at the gate.
+          </div>
+        )}
+      </div>
+      {cameraError && <div style={{ color: COLORS.rose, fontSize: 12, textAlign: "center", maxWidth: 360 }}>{cameraError}</div>}
+      {!scanning ? (
+        <button className="btn btn-primary" onClick={startScanning} disabled={starting}>
+          <Icon name="qrcode" size={16} /> {starting ? "Starting camera…" : "Scan to Check In"}
+        </button>
+      ) : (
+        <button className="btn btn-danger" onClick={stopScanning}>Cancel</button>
+      )}
+    </div>
+  );
+}
+
+function GateScannerPanel({ teachers, getRecord, markAttendance, date, setDate, today, showNotification, gateCode, regenerateGateCode, printGatePoster }) {
   const scannerBoxId = "sarms-gate-scanner-box";
   const scannerRef = useRef(null);   // holds the live Html5Qrcode instance
   const cooldownRef = useRef({});    // { teacherId: timestampOfLastScan } — stops rapid re-reads of a badge held in frame
@@ -10339,6 +10458,36 @@ function GateScannerPanel({ teachers, getRecord, markAttendance, date, setDate, 
 
   return (
     <div>
+      {/* Rotating gate code — the primary self check-in method: teachers
+          scan this from their OWN Attendance page with their own phone. */}
+      <div className="card" style={{ marginBottom: 16, padding: "16px 18px" }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>🎫 Teacher Self Check-In Code</div>
+        <div style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 12 }}>
+          Print this and post it at the gate. Teachers scan it themselves from their own "My Attendance" page —
+          no staff device needed. Regenerate anytime to instantly invalidate any old photo/screenshot of it.
+        </div>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ fontSize: 12, color: COLORS.textSecondary }}>
+            {gateCode?.token ? (
+              <>Current code: <strong style={{ color: COLORS.blueLight, fontFamily: "monospace" }}>{gateCode.token}</strong>
+                <br />Generated {new Date(gateCode.generatedAt).toLocaleString()} by {gateCode.generatedByName}</>
+            ) : "No gate code generated yet."}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-secondary" onClick={printGatePoster} disabled={!gateCode?.token}>
+              <Icon name="download" size={16} /> Print Poster
+            </button>
+            <button className="btn btn-gold" onClick={regenerateGateCode}>
+              🔄 {gateCode?.token ? "Regenerate Code" : "Generate Code"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ fontWeight: 700, fontSize: 14, margin: "20px 0 4px" }}>📷 Alternative: Staffed Scanning Device</div>
+      <div style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 12 }}>
+        For schools that prefer a dedicated device at the gate instead — this scans each teacher's own printed ID badge.
+      </div>
       <div className="card" style={{ marginBottom: 16, padding: "14px 18px" }}>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
           <div>
@@ -10504,6 +10653,64 @@ function AttendancePage({ state, updateState, currentUser, showNotification }) {
     showNotification(`All ${teachers.length} teachers marked Present!`);
   };
 
+  // ── Rotating gate check-in code (admin/principal only) ────────────────
+  // This token is what gets printed on a physical poster at the gate and
+  // scanned by teachers' own phones — it is deliberately NOT tied to any
+  // one teacher's identity, so regenerating it instantly invalidates any
+  // old screenshot without needing to touch teacher accounts at all.
+  const regenerateGateCode = () => {
+    const newCode = { token: generateGateToken(), generatedAt: new Date().toISOString(), generatedByName: currentUser.name };
+    updateState({
+      gateCode: newCode,
+      auditTrail: [{ id: generateId(), userId: currentUser.id, userName: currentUser.name,
+        action: "Gate Code Regenerated", details: "Old gate check-in code invalidated",
+        timestamp: new Date().toISOString() }, ...(state.auditTrail || [])],
+    });
+    showNotification("New gate code generated — old screenshots/printouts of the previous code will no longer work.");
+  };
+
+  const printGatePoster = () => {
+    if (!state.gateCode?.token) { showNotification("Generate a gate code first.", "error"); return; }
+    import("jsbarcode").then(({ default: JsBarcode }) => {
+      const canvas = document.createElement("canvas");
+      JsBarcode(canvas, state.gateCode.token, { format: "CODE128", displayValue: true, margin: 10, height: 110, width: 3.2, fontSize: 16 });
+      const barcodeDataUrl = canvas.toDataURL("image/png");
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/>
+<title>Gate Check-In Code</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Georgia',serif;background:#f5f7ff;padding:40px;display:flex;justify-content:center}
+  .poster{width:480px;background:white;border-radius:20px;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.2);border:1px solid #dce3f5;text-align:center}
+  .poster-header{background:linear-gradient(135deg,#1B3A8F,#2563EB);color:white;padding:22px}
+  .poster-school{font-size:20px;font-weight:800}
+  .poster-sub{font-size:12px;opacity:0.85;margin-top:4px;text-transform:uppercase;letter-spacing:0.1em}
+  .poster-body{padding:30px 24px}
+  .poster-instruction{font-size:15px;color:#1a1a2e;margin-bottom:20px;line-height:1.5}
+  .poster-barcode img{width:100%;height:auto}
+  .poster-note{font-size:11px;color:#999;margin-top:16px}
+  @media print{body{background:white}.poster{box-shadow:none;border:1px solid #ccc}}
+</style></head><body>
+<div class="poster">
+  <div class="poster-header">
+    <div class="poster-school">${state.institution.name}</div>
+    <div class="poster-sub">Staff Gate Check-In</div>
+  </div>
+  <div class="poster-body">
+    <div class="poster-instruction">📱 Teachers: scan this code with your phone in the SARMS app to mark yourself present.</div>
+    <div class="poster-barcode"><img src="${barcodeDataUrl}" alt="gate barcode"/></div>
+    <div class="poster-note">Generated ${new Date(state.gateCode.generatedAt).toLocaleString()} · This code changes periodically — old printouts stop working automatically.</div>
+  </div>
+</div>
+<script>window.onload=()=>window.print()</script>
+</body></html>`;
+      const blob = new Blob([html], { type: "text/html" });
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    }).catch(() => showNotification("Couldn't load the barcode library. Check your connection and try again.", "error"));
+  };
+
+
   const history = (state.attendance || [])
     .filter(a => isTeacher ? a.teacherId === currentUser.id : true)
     .filter(a => !filterStatus || a.status === filterStatus)
@@ -10582,6 +10789,9 @@ function AttendancePage({ state, updateState, currentUser, showNotification }) {
           setDate={setDate}
           today={today}
           showNotification={showNotification}
+          gateCode={state.gateCode}
+          regenerateGateCode={regenerateGateCode}
+          printGatePoster={printGatePoster}
         />
       )}
 
@@ -10610,6 +10820,17 @@ function AttendancePage({ state, updateState, currentUser, showNotification }) {
               </div>
             </div>
           </div>
+
+          {isTeacher && (
+            <TeacherGateCheckin
+              currentUser={currentUser}
+              gateCode={state.gateCode}
+              markAttendance={markAttendance}
+              getRecord={getRecord}
+              date={date}
+              showNotification={showNotification}
+            />
+          )}
 
           <div style={{display:"flex",flexDirection:"column",gap:10}}>
             {visibleTeachers.map(t => {
