@@ -10613,6 +10613,18 @@ function AttendancePage({ state, updateState, currentUser, showNotification }) {
     showNotification(`${teacher?.name} marked as ${status}`);
   };
 
+  const clearAttendance = (teacherId) => {
+    const teacher = state.users.find(u => u.id === teacherId);
+    if (!window.confirm(`Clear ${teacher?.name}'s attendance record for ${date}? They'll be able to self check-in again (via gate scan or manual marking).`)) return;
+    updateState({
+      attendance: (state.attendance || []).filter(a => !(a.teacherId === teacherId && a.date === date)),
+      auditTrail: [{ id: generateId(), userId: currentUser.id, userName: currentUser.name,
+        action: "Attendance Cleared", details: `${teacher?.name}'s ${date} record cleared`,
+        timestamp: new Date().toISOString() }, ...(state.auditTrail || [])],
+    });
+    showNotification(`${teacher?.name}'s attendance for ${date} cleared.`);
+  };
+
   const updateLocalEdit = (teacherId, field, value) => {
     setEditTimes(prev => ({
       ...prev,
@@ -10862,10 +10874,20 @@ function AttendancePage({ state, updateState, currentUser, showNotification }) {
                       </div>
                     </div>
                     {isPrincipal ? (
-                      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
                         <StatusBtn teacherId={t.id} status="Present" current={rec?.status} color={COLORS.emerald} icon="✅"/>
                         <StatusBtn teacherId={t.id} status="Late"    current={rec?.status} color={COLORS.gold}   icon="⏰"/>
                         <StatusBtn teacherId={t.id} status="Absent"  current={rec?.status} color={COLORS.rose}   icon="❌"/>
+                        {rec && (
+                          <button
+                            onClick={() => clearAttendance(t.id)}
+                            title="Clear this record — lets the teacher self check-in again"
+                            style={{ padding: "5px 10px", borderRadius: 20, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                              border: "2px solid var(--border)", background: "transparent", color: COLORS.textMuted }}
+                          >
+                            ✕ Clear
+                          </button>
+                        )}
                       </div>
                     ) : (
                       <div style={{padding:"6px 16px",borderRadius:20,fontSize:13,fontWeight:700,
