@@ -152,6 +152,8 @@ $saveMap = [
     'save_payments'      => 'payments',
     'save_payment_types' => 'paymentTypes',
     'save_attendance'    => 'attendance',
+    'save_gate_code'            => 'gateCode',
+    'save_attendance_settings'  => 'attendanceSettings',
 ];
 
 if (isset($saveMap[$action])) {

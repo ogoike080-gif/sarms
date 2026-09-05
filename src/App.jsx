@@ -138,6 +138,8 @@ const DB = (() => {
       if (updates.payments)         jobs.push(req("save_payments",       "POST", { data: fullState.payments }));
       if (updates.paymentTypes)     jobs.push(req("save_payment_types",  "POST", { data: fullState.paymentTypes }));
       if (updates.attendance)       jobs.push(req("save_attendance",     "POST", { data: fullState.attendance }));
+      if (updates.gateCode)         jobs.push(req("save_gate_code",           "POST", { data: fullState.gateCode }));
+      if (updates.attendanceSettings) jobs.push(req("save_attendance_settings", "POST", { data: fullState.attendanceSettings }));
       if (updates.sessions !== undefined || updates.currentSession !== undefined ||
           updates.currentTerm !== undefined || updates.resultPublished !== undefined) {
         jobs.push(req("save_settings", "POST", {
