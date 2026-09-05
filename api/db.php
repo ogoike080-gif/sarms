@@ -206,6 +206,7 @@ function defaultState(): array {
             'signature'        => null,
         ],
         'gateCode' => ['token' => '', 'generatedAt' => '', 'generatedByName' => ''],
+        'attendanceSettings' => ['lateCutoffTime' => '08:00', 'absentCutoffTime' => '10:00'],
         'sessions'        => ['2024/2025'],
         'currentSession'  => '2024/2025',
         'currentTerm'     => 'First Term',

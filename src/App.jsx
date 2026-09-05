@@ -40,6 +40,12 @@ const INITIAL_STATE = {
   // check themselves in. Admin/principal can regenerate it anytime, which
   // instantly invalidates any old screenshot someone may have saved.
   gateCode: { token: "", generatedAt: "", generatedByName: "" },
+  // Cutoff times for automatic attendance status. A teacher who checks in
+  // (scans the gate code) at or before lateCutoffTime is Present, after it
+  // is Late. Anyone with no check-in at all by absentCutoffTime gets
+  // auto-marked Absent — this is what covers "the principal isn't around":
+  // no one has to click a button for either of these to happen.
+  attendanceSettings: { lateCutoffTime: "08:00", absentCutoffTime: "10:00" },
   sessions: ["2024/2025"],
   currentSession: "2024/2025",
   terms: ["First Term", "Second Term", "Third Term"],
@@ -10277,7 +10283,7 @@ function PaymentsPage({ state, updateState, currentUser, showNotification }) {
 // encodes the teacher's own user id). A successful read marks that teacher
 // Present for the selected date, the same as clicking the button by hand.
 // ─── TEACHER SELF CHECK-IN (scans the gate poster with their own camera) ───
-function TeacherGateCheckin({ currentUser, gateCode, markAttendance, getRecord, date, showNotification }) {
+function TeacherGateCheckin({ currentUser, gateCode, markAttendance, getRecord, date, showNotification, lateCutoffTime }) {
   const scannerBoxId = "sarms-teacher-checkin-box";
   const scannerRef = useRef(null);
   const [scanning, setScanning] = useState(false);
@@ -10303,7 +10309,12 @@ function TeacherGateCheckin({ currentUser, gateCode, markAttendance, getRecord, 
       return;
     }
     stopScanning();
-    markAttendance(currentUser.id, "Present");
+    // Present if scanning at/before the cutoff, Late otherwise — this is
+    // what lets check-in work correctly with no one having to judge or
+    // click anything by hand.
+    const nowStr = new Date().toTimeString().slice(0, 5);
+    const status = nowStr <= (lateCutoffTime || "08:00") ? "Present" : "Late";
+    markAttendance(currentUser.id, status);
   };
 
   const startScanning = () => {
@@ -10411,6 +10422,44 @@ function GateCodeManagerPanel({ gateCode, regenerateGateCode, printGatePoster })
             🔄 {gateCode?.token ? "Regenerate Code" : "Generate Code"}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── AUTO-ATTENDANCE CUTOFF SETTINGS (admin/principal) ─────────────────────
+// Controls both automatic behaviors: a check-in at/before lateCutoffTime is
+// Present, after it is Late; anyone with no check-in at all by
+// absentCutoffTime gets auto-marked Absent by AttendancePage's background
+// check — this is what makes attendance work even if no one is running it
+// by hand that day.
+function AttendanceCutoffSettings({ settings, updateSettings }) {
+  const [form, setForm] = useState(settings);
+  const dirty = form.lateCutoffTime !== settings.lateCutoffTime || form.absentCutoffTime !== settings.absentCutoffTime;
+
+  return (
+    <div className="card" style={{ padding: "20px 22px", marginTop: 16 }}>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>⏰ Automatic Attendance Rules</div>
+      <div style={{ fontSize: 13, color: COLORS.textMuted, marginBottom: 16, lineHeight: 1.5 }}>
+        These apply automatically — no one needs to be online marking attendance for them to take effect.
+        A check-in at or before the first time is <strong style={{ color: COLORS.emerald }}>Present</strong>;
+        after it, <strong style={{ color: COLORS.gold }}>Late</strong>. Anyone with no check-in at all by the
+        second time is <strong style={{ color: COLORS.rose }}>Absent</strong> automatically.
+      </div>
+      <div style={{ display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label className="form-label">Present if checked in by</label>
+          <input type="time" className="form-input" value={form.lateCutoffTime}
+            onChange={(e) => setForm({ ...form, lateCutoffTime: e.target.value })} style={{ maxWidth: 160 }} />
+        </div>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label className="form-label">Auto-mark Absent after</label>
+          <input type="time" className="form-input" value={form.absentCutoffTime}
+            onChange={(e) => setForm({ ...form, absentCutoffTime: e.target.value })} style={{ maxWidth: 160 }} />
+        </div>
+        <button className="btn btn-primary" disabled={!dirty} onClick={() => updateSettings(form)}>
+          Save Rules
+        </button>
       </div>
     </div>
   );
@@ -10575,6 +10624,45 @@ function AttendancePage({ state, updateState, currentUser, showNotification }) {
     }).catch(() => showNotification("Couldn't load the barcode library. Check your connection and try again.", "error"));
   };
 
+  // ── Auto-mark Absent for no-shows (runs with no one having to click
+  //    anything) ──────────────────────────────────────────────────────
+  // Fires whenever an admin/principal has this page open, for today's
+  // date only. Once the configured cutoff time has passed, any teacher
+  // who still has no attendance record at all for today gets one created
+  // automatically as Absent. This never touches a teacher who already
+  // has a record (Present/Late/Absent/manually set) — it only fills in
+  // the gaps, so it can run repeatedly without side effects.
+  useEffect(() => {
+    if (!isPrincipal) return;
+    if (date !== today) return;
+    const cutoff = state.attendanceSettings?.absentCutoffTime || "10:00";
+    const nowStr = new Date().toTimeString().slice(0, 5);
+    if (nowStr < cutoff) return;
+
+    const already = new Set((state.attendance || []).filter(a => a.date === date).map(a => a.teacherId));
+    const missing = teachers.filter(t => !already.has(t.id));
+    if (missing.length === 0) return;
+
+    const newAtt = [...(state.attendance || [])];
+    const newAudit = [];
+    missing.forEach(t => {
+      newAtt.push({
+        id: generateId(), teacherId: t.id, date, status: "Absent",
+        timeIn: "", timeOut: "", note: `Auto-marked — no check-in by ${cutoff}`,
+        recordedBy: "system", recordedByName: "SARMS (automatic)",
+        updatedAt: new Date().toISOString(),
+      });
+      newAudit.push({
+        id: generateId(), userId: "system", userName: "SARMS",
+        action: "Attendance Auto-Marked",
+        details: `${t.name} auto-marked Absent for ${date} — no check-in by ${cutoff}`,
+        timestamp: new Date().toISOString(),
+      });
+    });
+    updateState({ attendance: newAtt, auditTrail: [...newAudit, ...(state.auditTrail || [])] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPrincipal, date, today, teachers.length, (state.attendance || []).length, state.attendanceSettings?.absentCutoffTime]);
+
 
   const history = (state.attendance || [])
     .filter(a => isTeacher ? a.teacherId === currentUser.id : true)
@@ -10646,11 +10734,17 @@ function AttendancePage({ state, updateState, currentUser, showNotification }) {
 
       {/* ── GATE CODE TAB ── */}
       {tab === "scan" && isPrincipal && (
-        <GateCodeManagerPanel
-          gateCode={state.gateCode}
-          regenerateGateCode={regenerateGateCode}
-          printGatePoster={printGatePoster}
-        />
+        <>
+          <GateCodeManagerPanel
+            gateCode={state.gateCode}
+            regenerateGateCode={regenerateGateCode}
+            printGatePoster={printGatePoster}
+          />
+          <AttendanceCutoffSettings
+            settings={state.attendanceSettings || { lateCutoffTime: "08:00", absentCutoffTime: "10:00" }}
+            updateSettings={(s) => { updateState({ attendanceSettings: s }); showNotification("Attendance rules updated."); }}
+          />
+        </>
       )}
 
       {/* ── MARK TAB ── */}
@@ -10687,6 +10781,7 @@ function AttendancePage({ state, updateState, currentUser, showNotification }) {
               getRecord={getRecord}
               date={date}
               showNotification={showNotification}
+              lateCutoffTime={state.attendanceSettings?.lateCutoffTime}
             />
           )}
 
