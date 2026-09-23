@@ -154,6 +154,7 @@ $saveMap = [
     'save_attendance'    => 'attendance',
     'save_gate_code'            => 'gateCode',
     'save_attendance_settings'  => 'attendanceSettings',
+    'save_suggestions'          => 'suggestions',
 ];
 
 if (isset($saveMap[$action])) {
@@ -241,6 +242,7 @@ function defaultState(): array {
         'payments'         => [],
         'paymentTypes'     => ['School Fees','Exam Fees','Development Levy','Uniform','Books','PTA Levy','Others'],
         'attendance'       => [],
+        'suggestions'      => [],
     ];
 }
 

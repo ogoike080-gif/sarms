@@ -81,6 +81,9 @@ const INITIAL_STATE = {
   payments: [],
   paymentTypes: ["School Fees", "Exam Fees", "Development Levy", "Uniform", "Books", "PTA Levy", "Others"],
   attendance: [],   // [{id, teacherId, date, timeIn, timeOut, status, classId, note, recordedBy}]
+  // Parent/guardian feedback on school improvement. Admin & principal can
+  // review and mark each one reviewed/actioned; parents only see their own.
+  suggestions: [],  // [{id, authorId, authorName, studentName, category, message, status, date}]
   // API sync flags
   _loaded: false,
   _apiError: null,
@@ -140,6 +143,7 @@ const DB = (() => {
       if (updates.attendance)       jobs.push(req("save_attendance",     "POST", { data: fullState.attendance }));
       if (updates.gateCode)         jobs.push(req("save_gate_code",           "POST", { data: fullState.gateCode }));
       if (updates.attendanceSettings) jobs.push(req("save_attendance_settings", "POST", { data: fullState.attendanceSettings }));
+      if (updates.suggestions)      jobs.push(req("save_suggestions",    "POST", { data: fullState.suggestions }));
       if (updates.sessions !== undefined || updates.currentSession !== undefined ||
           updates.currentTerm !== undefined || updates.resultPublished !== undefined) {
         jobs.push(req("save_settings", "POST", {
@@ -685,6 +689,20 @@ const Icon = ({ name, size = 18, color = "currentColor" }) => {
         strokeWidth="1"
       >
         <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+      </svg>
+    ),
+    lightbulb: (
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke={color}
+        strokeWidth="2"
+      >
+        <path d="M9 18h6" />
+        <path d="M10 22h4" />
+        <path d="M12 2a7 7 0 0 0-4 12.74V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.26A7 7 0 0 0 12 2z" />
       </svg>
     ),
     lock: (
@@ -1788,6 +1806,7 @@ function getNavItems(role) {
           { key: "dashboard", label: "Dashboard", icon: "dashboard" },
           { key: "analytics", label: "Analytics", icon: "chart" },
           { key: "announcements", label: "Announcements", icon: "bell" },
+          { key: "suggestions", label: "Parent Suggestions", icon: "lightbulb" },
         ],
       },
       {
@@ -1870,6 +1889,7 @@ function getNavItems(role) {
           { key: "analytics",     label: "Analytics",        icon: "chart" },
           { key: "broadsheet",    label: "Broadsheet",       icon: "book" },
           { key: "announcements", label: "Announcements",    icon: "bell" },
+          { key: "suggestions",   label: "Parent Suggestions", icon: "lightbulb" },
         ],
       },
       {
@@ -1927,6 +1947,7 @@ function getNavItems(role) {
           { key: "dashboard", label: "Dashboard", icon: "dashboard" },
           { key: "announcements", label: "Announcements", icon: "bell" },
           { key: "assignments", label: "Assignments", icon: "upload" },
+          { key: "suggestions", label: "Suggest an Improvement", icon: "lightbulb" },
         ],
       },
     ];
@@ -1980,6 +2001,8 @@ function PageRouter({
     grading:       (isBursar || isPrincipal) ? <DashboardPage {...props} /> : <GradingPage {...props} />,
     scoreentry:    isBursar ? <DashboardPage {...props} /> : <ScoreEntryPage {...props} />,
     assignments:   isBursar ? <DashboardPage {...props} /> : <AssignmentsPage {...props} />,
+    suggestions:   (currentUser.role === "parent" || currentUser.role === "admin" || isPrincipal)
+                     ? <SuggestionsPage {...props} /> : <DashboardPage {...props} />,
     profile:       <ProfilePage {...props} />,
   };
 
@@ -3907,6 +3930,190 @@ function AnnouncementsPage({ state, updateState, currentUser, showNotification }
     </div>
   );
 }
+
+// ─── SUGGESTIONS PAGE (parent feedback on school improvement) ─────────────────
+// Parents submit suggestions; admin/principal review and respond. Parents
+// only ever see their own; admin/principal see everyone's.
+function SuggestionsPage({ state, updateState, currentUser, showNotification }) {
+  const isParent = currentUser.role === "parent";
+  const isReviewer = currentUser.role === "admin" || currentUser.role === "principal";
+
+  const CATEGORIES = ["Academics", "Facilities", "Safety & Security", "Communication", "Extracurricular", "Feeding/Catering", "Transport", "Other"];
+  const [form, setForm] = useState({ category: "Academics", message: "" });
+  const [filterStatus, setFilterStatus] = useState("");
+  const [replyDrafts, setReplyDrafts] = useState({}); // {suggestionId: text}
+
+  const studentUser = isParent && currentUser.childId
+    ? state.users.find(u => u.id === currentUser.childId) : null;
+
+  const submitSuggestion = () => {
+    if (!form.message.trim()) { showNotification("Please write your suggestion first.", "error"); return; }
+    const newSuggestion = {
+      id: generateId(),
+      authorId: currentUser.id,
+      authorName: currentUser.name,
+      studentName: studentUser?.name || "",
+      category: form.category,
+      message: form.message.trim(),
+      status: "New",
+      date: new Date().toISOString(),
+      adminResponse: "",
+      respondedByName: "",
+      respondedAt: "",
+    };
+    updateState({ suggestions: [newSuggestion, ...(state.suggestions || [])] });
+    setForm({ category: "Academics", message: "" });
+    showNotification("Thank you — your suggestion has been sent to the school.");
+  };
+
+  const updateStatus = (id, status) => {
+    updateState({
+      suggestions: (state.suggestions || []).map(s => s.id === id ? { ...s, status } : s),
+    });
+  };
+
+  const sendReply = (id) => {
+    const reply = (replyDrafts[id] || "").trim();
+    if (!reply) return;
+    updateState({
+      suggestions: (state.suggestions || []).map(s => s.id === id
+        ? { ...s, adminResponse: reply, respondedByName: currentUser.name, respondedAt: new Date().toISOString(), status: s.status === "New" ? "Reviewed" : s.status }
+        : s),
+    });
+    setReplyDrafts({ ...replyDrafts, [id]: "" });
+    showNotification("Response sent to parent.");
+  };
+
+  const visible = isReviewer
+    ? (state.suggestions || []).filter(s => !filterStatus || s.status === filterStatus)
+    : (state.suggestions || []).filter(s => s.authorId === currentUser.id);
+
+  const statusColor = (status) =>
+    status === "New" ? COLORS.rose : status === "Reviewed" ? COLORS.gold : COLORS.emerald;
+
+  return (
+    <div>
+      <div className="section-header">
+        <div>
+          <div className="section-title">{isReviewer ? "Parent Suggestions" : "Suggest an Improvement"}</div>
+          <div className="section-sub">
+            {isReviewer
+              ? `${visible.length} suggestion${visible.length === 1 ? "" : "s"}`
+              : "Tell the school what you'd like to see improved — every suggestion reaches the school office."}
+          </div>
+        </div>
+        {isReviewer && (
+          <select className="form-input" style={{ maxWidth: 200 }} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
+            <option value="">All statuses</option>
+            <option value="New">New</option>
+            <option value="Reviewed">Reviewed</option>
+            <option value="Actioned">Actioned</option>
+          </select>
+        )}
+      </div>
+
+      {isParent && (
+        <div className="card" style={{ marginBottom: 24 }}>
+          <div className="modal-title" style={{ marginBottom: 16 }}>New Suggestion</div>
+          <div className="grid-2">
+            <div className="form-group">
+              <label className="form-label">Category</label>
+              <select className="form-input" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            {studentUser && (
+              <div className="form-group">
+                <label className="form-label">Regarding</label>
+                <input className="form-input" value={studentUser.name} disabled />
+              </div>
+            )}
+          </div>
+          <div className="form-group">
+            <label className="form-label">Your suggestion</label>
+            <textarea
+              className="form-input"
+              rows={4}
+              value={form.message}
+              onChange={(e) => setForm({ ...form, message: e.target.value })}
+              placeholder="e.g. It would help if the school posted the exam timetable earlier..."
+            />
+          </div>
+          <button className="btn btn-primary" onClick={submitSuggestion}>
+            <Icon name="lightbulb" size={16} /> Send Suggestion
+          </button>
+        </div>
+      )}
+
+      {visible.map((s) => (
+        <div key={s.id} className="card" style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
+                <span className="badge badge-blue">{s.category}</span>
+                <span className="badge" style={{ background: `${statusColor(s.status)}33`, color: statusColor(s.status) }}>{s.status}</span>
+                {isReviewer && <span className="badge badge-gray">{s.authorName}{s.studentName ? ` · ${s.studentName}` : ""}</span>}
+                <span className="badge badge-gray">{new Date(s.date).toLocaleDateString()}</span>
+              </div>
+              <div style={{ fontSize: 14, color: COLORS.textSecondary, lineHeight: 1.6 }}>{s.message}</div>
+
+              {s.adminResponse && (
+                <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.25)", borderRadius: 8 }}>
+                  <div style={{ fontSize: 11, color: COLORS.blueLight, fontWeight: 700, marginBottom: 3 }}>
+                    Response from {s.respondedByName} · {new Date(s.respondedAt).toLocaleDateString()}
+                  </div>
+                  <div style={{ fontSize: 13, color: COLORS.textSecondary }}>{s.adminResponse}</div>
+                </div>
+              )}
+
+              {isReviewer && (
+                <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  {["New", "Reviewed", "Actioned"].map(st => (
+                    <button
+                      key={st}
+                      onClick={() => updateStatus(s.id, st)}
+                      style={{
+                        padding: "4px 12px", borderRadius: 20, fontSize: 11, fontWeight: 700, cursor: "pointer",
+                        border: `2px solid ${s.status === st ? statusColor(st) : "var(--border)"}`,
+                        background: s.status === st ? `${statusColor(st)}33` : "transparent",
+                        color: s.status === st ? statusColor(st) : COLORS.textMuted,
+                      }}
+                    >
+                      {st}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {isReviewer && (
+                <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+                  <input
+                    className="form-input"
+                    placeholder={s.adminResponse ? "Update your response…" : "Write a response to the parent…"}
+                    value={replyDrafts[s.id] || ""}
+                    onChange={(e) => setReplyDrafts({ ...replyDrafts, [s.id]: e.target.value })}
+                    onKeyDown={(e) => { if (e.key === "Enter") sendReply(s.id); }}
+                  />
+                  <button className="btn btn-secondary btn-sm" onClick={() => sendReply(s.id)}>Reply</button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+
+      {visible.length === 0 && (
+        <div className="empty-state card">
+          <div className="empty-state-icon">💡</div>
+          <div className="empty-state-text">
+            {isParent ? "You haven't sent any suggestions yet." : "No suggestions match this filter."}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 // ─── STUDENTS PAGE ────────────────────────────────────────────────────────────
 function StudentsPage({ state, updateState, currentUser, showNotification }) {
