@@ -5119,11 +5119,13 @@ function TeachersPage({ state, updateState, currentUser, showNotification }) {
   });
   const [bursarModal, setBursarModal] = useState(null);
   const [bursarForm, setBursarForm]   = useState({
-    name: "", email: "", password: "bursar123",
+    name: "", email: "", password: "bursar123", childId: "",
   });
 
   const teachers = state.users.filter((u) => u.role === "teacher");
   const bursars  = state.users.filter((u) => u.role === "bursar");
+  const parents  = state.users.filter((u) => u.role === "parent");
+  const students = state.users.filter((u) => u.role === "student");
 
   const saveTeacher = () => {
     if (!form.name || !form.email) { showNotification("Fill required fields", "error"); return; }
@@ -5139,11 +5141,14 @@ function TeachersPage({ state, updateState, currentUser, showNotification }) {
   };
 
   const saveBursar = () => {
-    const role = (bursarModal === "add-principal" || bursarModal?.type === "edit-principal") ? "principal" : "bursar";
+    const role = (bursarModal === "add-principal" || bursarModal?.type === "edit-principal") ? "principal"
+      : (bursarModal === "add-parent" || bursarModal?.type === "edit-parent") ? "parent"
+      : "bursar";
     if (!bursarForm.name || !bursarForm.email) { showNotification("Fill name and email", "error"); return; }
+    if (role === "parent" && !bursarForm.childId) { showNotification("Please link this account to a student.", "error"); return; }
     const exists = state.users.find(u => u.email.toLowerCase() === bursarForm.email.toLowerCase());
-    if (exists && (bursarModal === "add" || bursarModal === "add-principal")) { showNotification("Email already exists", "error"); return; }
-    if (bursarModal === "add" || bursarModal === "add-principal") {
+    if (exists && (bursarModal === "add" || bursarModal === "add-principal" || bursarModal === "add-parent")) { showNotification("Email already exists", "error"); return; }
+    if (bursarModal === "add" || bursarModal === "add-principal" || bursarModal === "add-parent") {
       updateState({ users: [...state.users, { id: generateId(), role, avatar: null, ...bursarForm }] });
       showNotification(`${role.charAt(0).toUpperCase()+role.slice(1)} account created!`);
     } else {
@@ -5151,7 +5156,7 @@ function TeachersPage({ state, updateState, currentUser, showNotification }) {
       showNotification("Account updated!");
     }
     setBursarModal(null);
-    setBursarForm({ name: "", email: "", password: "bursar123" });
+    setBursarForm({ name: "", email: "", password: "bursar123", childId: "" });
   };
 
   const deleteUser = (id, role) => {
@@ -5235,11 +5240,19 @@ function TeachersPage({ state, updateState, currentUser, showNotification }) {
     <div>
       <div className="section-header">
         <div>
-          <div className="section-title">Staff Management</div>
-          <div className="section-sub">{teachers.length} teachers · {bursars.length} bursars</div>
+          <div className="section-title">Staff & Parent Accounts</div>
+          <div className="section-sub">{teachers.length} teachers · {bursars.length} bursars · {parents.length} parents</div>
         </div>
-        <button className="btn btn-primary" onClick={() => tab === "bursars" ? setBursarModal("add") : tab === "principals" ? setBursarModal("add-principal") : setModal("add")}>
-          <Icon name="plus" size={16} /> Add {tab === "bursars" ? "Bursar" : tab === "principals" ? "Principal" : "Teacher"}
+        <button
+          className="btn btn-primary"
+          onClick={() => {
+            if (tab === "bursars") { setBursarForm({ name: "", email: "", password: "bursar123", childId: "" }); setBursarModal("add"); }
+            else if (tab === "principals") { setBursarForm({ name: "", email: "", password: "principal123", childId: "" }); setBursarModal("add-principal"); }
+            else if (tab === "parents") { setBursarForm({ name: "", email: "", password: "parent123", childId: "" }); setBursarModal("add-parent"); }
+            else setModal("add");
+          }}
+        >
+          <Icon name="plus" size={16} /> Add {tab === "bursars" ? "Bursar" : tab === "principals" ? "Principal" : tab === "parents" ? "Parent" : "Teacher"}
         </button>
       </div>
 
@@ -5252,6 +5265,9 @@ function TeachersPage({ state, updateState, currentUser, showNotification }) {
         </div>
         <div className={`tab ${tab === "principals" ? "active" : ""}`} onClick={() => setTab("principals")}>
           🎓 Principals ({state.users.filter(u=>u.role==="principal").length})
+        </div>
+        <div className={`tab ${tab === "parents" ? "active" : ""}`} onClick={() => setTab("parents")}>
+          👪 Parents ({parents.length})
         </div>
       </div>
 
@@ -5467,7 +5483,7 @@ function TeachersPage({ state, updateState, currentUser, showNotification }) {
                         <td>
                           <div style={{ display: "flex", gap: 6 }}>
                             <button className="btn btn-secondary btn-sm" onClick={() => {
-                              setBursarForm({ name: b.name, email: b.email, password: b.password });
+                              setBursarForm({ name: b.name, email: b.email, password: b.password, childId: "" });
                               setBursarModal({ type: "edit", id: b.id });
                             }}>Edit</button>
                             <button className="btn btn-danger btn-sm" onClick={() => deleteUser(b.id, "bursar")}>Delete</button>
@@ -5538,7 +5554,7 @@ function TeachersPage({ state, updateState, currentUser, showNotification }) {
                         <td>
                           <div style={{ display: "flex", gap: 6 }}>
                             <button className="btn btn-secondary btn-sm" onClick={() => {
-                              setBursarForm({ name: p.name, email: p.email, password: p.password });
+                              setBursarForm({ name: p.name, email: p.email, password: p.password, childId: "" });
                               setBursarModal({ type: "edit-principal", id: p.id });
                             }}>Edit</button>
                             <button className="btn btn-danger btn-sm" onClick={() => deleteUser(p.id, "principal")}>Delete</button>
@@ -5567,21 +5583,104 @@ function TeachersPage({ state, updateState, currentUser, showNotification }) {
         </div>
       )}
 
-      {/* Bursar / Principal Modal */}
+      {/* ── PARENTS TAB ── */}
+      {tab === "parents" && (
+        <div>
+          {parents.length === 0 ? (
+            <div className="card">
+              <div className="empty-state">
+                <div className="empty-state-icon">👪</div>
+                <div className="empty-state-text">No parent accounts yet</div>
+                <div style={{ fontSize: 13, color: COLORS.textSecondary, marginBottom: 12, textAlign: "center" }}>
+                  Create a login for a parent/guardian, linked to their child, so they can view results and send suggestions.
+                </div>
+                <button className="btn btn-primary btn-sm" onClick={() => { setBursarForm({ name: "", email: "", password: "parent123", childId: "" }); setBursarModal("add-parent"); }}>
+                  <Icon name="plus" size={14} /> Create Parent Account
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="card">
+              <div className="table-wrapper">
+                <table>
+                  <thead>
+                    <tr><th>Name</th><th>Email</th><th>Linked Student</th><th>Password</th><th>Actions</th></tr>
+                  </thead>
+                  <tbody>
+                    {parents.map(p => {
+                      const child = students.find(s => s.id === p.childId);
+                      return (
+                        <tr key={p.id}>
+                          <td>
+                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              <div style={{ width: 34, height: 34, borderRadius: "50%", flexShrink: 0,
+                                background: "linear-gradient(135deg,#10B981,#2563EB)",
+                                display: "flex", alignItems: "center", justifyContent: "center",
+                                fontSize: 13, fontWeight: 700, color: "white" }}>
+                                {p.name.split(" ").map(n => n[0]).join("").slice(0, 2)}
+                              </div>
+                              <div>
+                                <div style={{ fontWeight: 600 }}>{p.name}</div>
+                                <span className="badge" style={{ fontSize: 10, background: "rgba(16,185,129,0.2)", color: "#34d399", border: "1px solid rgba(16,185,129,0.3)" }}>Parent</span>
+                              </div>
+                            </div>
+                          </td>
+                          <td style={{ fontSize: 13 }}>{p.email}</td>
+                          <td style={{ fontSize: 13 }}>
+                            {child ? child.name : <span style={{ color: COLORS.rose }}>⚠ No student linked</span>}
+                          </td>
+                          <td style={{ fontFamily: "monospace", fontSize: 12, color: COLORS.textMuted }}>{p.password}</td>
+                          <td>
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <button className="btn btn-secondary btn-sm" onClick={() => {
+                                setBursarForm({ name: p.name, email: p.email, password: p.password, childId: p.childId || "" });
+                                setBursarModal({ type: "edit-parent", id: p.id });
+                              }}>Edit</button>
+                              <button className="btn btn-danger btn-sm" onClick={() => deleteUser(p.id, "parent")}>Delete</button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          <div className="card" style={{ marginTop: 16, background: "rgba(16,185,129,0.06)", border: "1px solid rgba(16,185,129,0.2)" }}>
+            <div style={{ fontWeight: 700, marginBottom: 8, color: "#34d399" }}>👪 About Parent Accounts</div>
+            <div style={{ fontSize: 13, color: COLORS.textSecondary, lineHeight: 1.7 }}>
+              Each parent account is linked to exactly one student. With it, a parent can:<br/>
+              ✅ View their child's results and report card<br/>
+              ✅ View school announcements<br/>
+              ✅ View their child's assignments<br/>
+              ✅ Send suggestions to the school and message back and forth with admin/principal<br/>
+              ❌ Cannot access other students' records, scores, or school settings<br/><br/>
+              <em>Note: if a parent has more than one child at the school, create a separate account (different email) for each child — one account currently links to one student.</em>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bursar / Principal / Parent Modal */}
       {bursarModal && (
         <div className="modal-overlay" onClick={() => setBursarModal(null)}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 440 }}>
             <div className="modal-header">
               <div className="modal-title">
-                {(bursarModal === "add" || bursarModal?.type === "edit") ? "Bursar Account" : "Principal Account"}
+                {(bursarModal === "add" || bursarModal?.type === "edit") ? "Bursar Account"
+                  : (bursarModal === "add-parent" || bursarModal?.type === "edit-parent") ? "Parent Account"
+                  : "Principal Account"}
                 {" — "}
-                {(bursarModal === "add" || bursarModal === "add-principal") ? "Create" : "Edit"}
+                {(bursarModal === "add" || bursarModal === "add-principal" || bursarModal === "add-parent") ? "Create" : "Edit"}
               </div>
               <button className="modal-close" onClick={() => setBursarModal(null)}>×</button>
             </div>
             <div className="modal-body">
               <div style={{ padding: "10px 14px", background: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.2)", borderRadius: 8, fontSize: 12, color: COLORS.blueLight, marginBottom: 16 }}>
-                🔑 The bursar uses this email and password to log in at the school portal login page.
+                🔑 {(bursarModal === "add-parent" || bursarModal?.type === "edit-parent")
+                  ? "The parent uses this email and password to log in at the school portal login page."
+                  : "This account uses this email and password to log in at the school portal login page."}
               </div>
               <div className="form-group">
                 <label className="form-label">Full Name *</label>
@@ -5590,9 +5689,28 @@ function TeachersPage({ state, updateState, currentUser, showNotification }) {
               </div>
               <div className="form-group">
                 <label className="form-label">Email Address *</label>
-                <input className="form-input" type="email" placeholder="bursar@school.com"
+                <input className="form-input" type="email" placeholder="parent@example.com"
                   value={bursarForm.email} onChange={e => setBursarForm({...bursarForm, email: e.target.value})} />
               </div>
+              {(bursarModal === "add-parent" || bursarModal?.type === "edit-parent") && (
+                <div className="form-group">
+                  <label className="form-label">Linked Student *</label>
+                  <select className="form-input" value={bursarForm.childId}
+                    onChange={e => setBursarForm({...bursarForm, childId: e.target.value})}>
+                    <option value="">— Select the student —</option>
+                    {students.map(s => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}{s.studentId ? ` (${s.studentId})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {students.length === 0 && (
+                    <div style={{ fontSize: 12, color: COLORS.rose, marginTop: 4 }}>
+                      No students exist yet — add the student first under Students management.
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="form-group">
                 <label className="form-label">Password</label>
                 <input className="form-input" placeholder="Minimum 6 characters"
@@ -5602,7 +5720,7 @@ function TeachersPage({ state, updateState, currentUser, showNotification }) {
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setBursarModal(null)}>Cancel</button>
               <button className="btn btn-primary" onClick={saveBursar}>
-                <Icon name="check" size={16} /> {bursarModal === "add" ? "Create Account" : "Save Changes"}
+                <Icon name="check" size={16} /> {(bursarModal === "add" || bursarModal === "add-principal" || bursarModal === "add-parent") ? "Create Account" : "Save Changes"}
               </button>
             </div>
           </div>
