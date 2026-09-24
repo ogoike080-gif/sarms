@@ -83,7 +83,14 @@ const INITIAL_STATE = {
   attendance: [],   // [{id, teacherId, date, timeIn, timeOut, status, classId, note, recordedBy}]
   // Parent/guardian feedback on school improvement. Admin & principal can
   // review and mark each one reviewed/actioned; parents only see their own.
-  suggestions: [],  // [{id, authorId, authorName, studentName, category, message, status, date}]
+  // Parent/guardian conversation threads with admin/principal. This key is
+  // kept here only so load_all/defaultState stay consistent — the frontend
+  // never actually reads state.suggestions. All real access goes through
+  // SuggestionsAPI -> api/suggestions.php, which is authenticated and
+  // enforces per-thread ownership server-side (the generic save mechanism
+  // this INITIAL_STATE otherwise feeds has no auth or ownership check at
+  // all, so this slice is deliberately excluded from that sync path).
+  suggestions: [],  // shape: [{id, parentId, parentName, studentName, category, subject, status, parentUnread, createdAt, updatedAt, closedAt, messages: [{id, senderRole, senderName, text, createdAt}]}]
   // API sync flags
   _loaded: false,
   _apiError: null,
@@ -143,7 +150,11 @@ const DB = (() => {
       if (updates.attendance)       jobs.push(req("save_attendance",     "POST", { data: fullState.attendance }));
       if (updates.gateCode)         jobs.push(req("save_gate_code",           "POST", { data: fullState.gateCode }));
       if (updates.attendanceSettings) jobs.push(req("save_attendance_settings", "POST", { data: fullState.attendanceSettings }));
-      if (updates.suggestions)      jobs.push(req("save_suggestions",    "POST", { data: fullState.suggestions }));
+      // NOTE: 'suggestions' is deliberately absent here — that slice is
+      // now owned exclusively by SuggestionsAPI (api/suggestions.php),
+      // which validates per-thread ownership server-side. Routing it
+      // through this generic, unauthenticated save path would bypass
+      // that check entirely.
       if (updates.sessions !== undefined || updates.currentSession !== undefined ||
           updates.currentTerm !== undefined || updates.resultPublished !== undefined) {
         jobs.push(req("save_settings", "POST", {
@@ -211,6 +222,41 @@ const CalendarAPI = (() => {
     create:        (row, actorName) => req(`create&actorName=${encodeURIComponent(actorName || '')}`, 'POST', row),
     update:        (row, actorName) => req(`update&actorName=${encodeURIComponent(actorName || '')}`, 'POST', row),
     remove:        (id, actorName) => req(`delete&actorName=${encodeURIComponent(actorName || '')}`, 'POST', { id }),
+  };
+})();
+
+// ─── SUGGESTIONS API: PHP/MySQL bridge for parent<->admin conversation threads ──
+// Every call requires the JWT bearer token (AuthToken) — the backend
+// resolves the caller's identity and role itself from that token, and
+// scopes/validates every read and write server-side. See api/suggestions.php.
+const SuggestionsAPI = (() => {
+  const BASE = (() => {
+    const { origin, port } = window.location;
+    if (port === '5173' || port === '3000') return '/api/suggestions.php';
+    const segments = window.location.pathname.split('/').filter(Boolean);
+    const folder = (segments.length > 0 && segments[0] !== 'portal') ? '/' + segments[0] : '';
+    return origin + folder + '/api/suggestions.php';
+  })();
+
+  async function req(action, method = 'GET', body = null) {
+    const url = `${BASE}?action=${action}`;
+    const opts = { method, headers: { 'Content-Type': 'application/json', ...AuthToken.authHeader() } };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(url, opts);
+    const text = await res.text();
+    let json;
+    try { json = JSON.parse(text); }
+    catch (e) { throw new Error(`Suggestions API ${action}: invalid response (${text.slice(0, 120)})`); }
+    if (!res.ok) throw new Error(json.error || `Suggestions API ${action} failed (${res.status})`);
+    return json;
+  }
+
+  return {
+    list:      ()                          => req('list'),
+    create:    (category, subject, message) => req('create', 'POST', { category, subject, message }),
+    reply:     (threadId, message)         => req('reply', 'POST', { threadId, message }),
+    setStatus: (threadId, status)          => req('set_status', 'POST', { threadId, status }),
+    markRead:  (threadId)                  => req('mark_read', 'POST', { threadId }),
   };
 })();
 
@@ -1365,7 +1411,28 @@ function SARMS() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [modal, setModal]           = useState(null);
   const [notification, setNotification] = useState(null);
+  const [suggestionsUnread, setSuggestionsUnread] = useState(0);
   const styleRef = useRef(null);
+
+  // Refreshes the sidebar's "Suggestions" unread badge from the server.
+  // Called once right after login, and again by SuggestionsPage itself
+  // after any action that changes read/unread state (reply, mark_read,
+  // status change) — so the badge stays accurate without needing to poll.
+  const refreshSuggestionsUnread = useCallback((role) => {
+    if (!["parent", "admin", "principal"].includes(role)) return;
+    SuggestionsAPI.list().then((data) => {
+      const threads = data.threads || [];
+      const count = role === "parent"
+        ? threads.filter(t => t.parentUnread).length
+        : threads.filter(t => t.status === "New").length;
+      setSuggestionsUnread(count);
+    }).catch(() => {}); // silent — a stale/missing badge is not worth surfacing an error for
+  }, []);
+
+  useEffect(() => {
+    if (currentUser) refreshSuggestionsUnread(currentUser.role);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.id]);
 
   // ── Inject CSS once ──────────────────────────────────────────
   useEffect(() => {
@@ -1603,7 +1670,14 @@ function SARMS() {
     return <LoginPage onLogin={login} state={state} updateState={updateState} />;
   }
 
-  const NavItems = getNavItems(currentUser.role);
+  const NavItems = getNavItems(currentUser.role).map((section) => ({
+    ...section,
+    items: section.items.map((item) =>
+      item.key === "suggestions" && suggestionsUnread > 0
+        ? { ...item, badge: suggestionsUnread }
+        : item
+    ),
+  }));
 
   return (
     <div className="sarms-app">
@@ -1790,6 +1864,7 @@ function SARMS() {
             modal={modal}
             setModal={setModal}
             showNotification={showNotification}
+            refreshSuggestionsUnread={refreshSuggestionsUnread}
           />
         </div>
       </div>
@@ -1965,6 +2040,7 @@ function PageRouter({
   modal,
   setModal,
   showNotification,
+  refreshSuggestionsUnread,
 }) {
   const props = {
     state,
@@ -1974,6 +2050,7 @@ function PageRouter({
     modal,
     setModal,
     showNotification,
+    refreshSuggestionsUnread,
   };
 
   const isRestricted  = ["student", "parent"].includes(currentUser.role);
@@ -3931,66 +4008,200 @@ function AnnouncementsPage({ state, updateState, currentUser, showNotification }
   );
 }
 
-// ─── SUGGESTIONS PAGE (parent feedback on school improvement) ─────────────────
-// Parents submit suggestions; admin/principal review and respond. Parents
-// only ever see their own; admin/principal see everyone's.
-function SuggestionsPage({ state, updateState, currentUser, showNotification }) {
+// ─── SUGGESTIONS PAGE (parent <-> admin/principal conversation threads) ───────
+// Talks to api/suggestions.php (authenticated, per-thread ownership checked
+// server-side) rather than the generic state/updateState sync every other
+// page uses — see that file's header comment for why.
+function SuggestionsPage({ currentUser, showNotification, refreshSuggestionsUnread }) {
   const isParent = currentUser.role === "parent";
   const isReviewer = currentUser.role === "admin" || currentUser.role === "principal";
-
   const CATEGORIES = ["Academics", "Facilities", "Safety & Security", "Communication", "Extracurricular", "Feeding/Catering", "Transport", "Other"];
-  const [form, setForm] = useState({ category: "Academics", message: "" });
+
+  const [threads, setThreads] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [activeId, setActiveId] = useState(null);
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [newForm, setNewForm] = useState({ category: CATEGORIES[0], subject: "", message: "" });
+  const [replyText, setReplyText] = useState("");
+  const [sending, setSending] = useState(false);
   const [filterStatus, setFilterStatus] = useState("");
-  const [replyDrafts, setReplyDrafts] = useState({}); // {suggestionId: text}
+  const [search, setSearch] = useState("");
 
-  const studentUser = isParent && currentUser.childId
-    ? state.users.find(u => u.id === currentUser.childId) : null;
-
-  const submitSuggestion = () => {
-    if (!form.message.trim()) { showNotification("Please write your suggestion first.", "error"); return; }
-    const newSuggestion = {
-      id: generateId(),
-      authorId: currentUser.id,
-      authorName: currentUser.name,
-      studentName: studentUser?.name || "",
-      category: form.category,
-      message: form.message.trim(),
-      status: "New",
-      date: new Date().toISOString(),
-      adminResponse: "",
-      respondedByName: "",
-      respondedAt: "",
-    };
-    updateState({ suggestions: [newSuggestion, ...(state.suggestions || [])] });
-    setForm({ category: "Academics", message: "" });
-    showNotification("Thank you — your suggestion has been sent to the school.");
+  const loadThreads = () => {
+    setLoading(true);
+    SuggestionsAPI.list()
+      .then((data) => setThreads(data.threads || []))
+      .catch((e) => showNotification(e.message, "error"))
+      .finally(() => setLoading(false));
   };
 
-  const updateStatus = (id, status) => {
-    updateState({
-      suggestions: (state.suggestions || []).map(s => s.id === id ? { ...s, status } : s),
+  useEffect(() => { loadThreads(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const upsertThread = (updated) => {
+    setThreads((prev) => {
+      const exists = prev.some((t) => t.id === updated.id);
+      const next = exists ? prev.map((t) => (t.id === updated.id ? updated : t)) : [updated, ...prev];
+      return [...next].sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
     });
+    return updated;
   };
 
-  const sendReply = (id) => {
-    const reply = (replyDrafts[id] || "").trim();
-    if (!reply) return;
-    updateState({
-      suggestions: (state.suggestions || []).map(s => s.id === id
-        ? { ...s, adminResponse: reply, respondedByName: currentUser.name, respondedAt: new Date().toISOString(), status: s.status === "New" ? "Reviewed" : s.status }
-        : s),
+  const active = threads.find((t) => t.id === activeId) || null;
+
+  const openThread = (t) => {
+    setActiveId(t.id);
+    if (isParent && t.parentUnread) {
+      SuggestionsAPI.markRead(t.id)
+        .then((data) => { upsertThread(data.thread); refreshSuggestionsUnread?.(currentUser.role); })
+        .catch(() => {});
+    }
+  };
+
+  const submitNew = () => {
+    if (!newForm.subject.trim() || !newForm.message.trim()) {
+      showNotification("Please fill in the subject and message.", "error");
+      return;
+    }
+    setSending(true);
+    SuggestionsAPI.create(newForm.category, newForm.subject.trim(), newForm.message.trim())
+      .then((data) => {
+        upsertThread(data.thread);
+        setNewForm({ category: CATEGORIES[0], subject: "", message: "" });
+        setShowNewForm(false);
+        showNotification("Your suggestion has been sent to the school.");
+      })
+      .catch((e) => showNotification(e.message, "error"))
+      .finally(() => setSending(false));
+  };
+
+  const sendReply = () => {
+    if (!replyText.trim() || !active) return;
+    setSending(true);
+    SuggestionsAPI.reply(active.id, replyText.trim())
+      .then((data) => {
+        upsertThread(data.thread);
+        setReplyText("");
+        refreshSuggestionsUnread?.(currentUser.role);
+      })
+      .catch((e) => showNotification(e.message, "error"))
+      .finally(() => setSending(false));
+  };
+
+  const changeStatus = (status) => {
+    if (!active) return;
+    SuggestionsAPI.setStatus(active.id, status)
+      .then((data) => { upsertThread(data.thread); refreshSuggestionsUnread?.(currentUser.role); })
+      .catch((e) => showNotification(e.message, "error"));
+  };
+
+  const visibleList = threads
+    .filter((t) => !filterStatus || t.status === filterStatus)
+    .filter((t) => {
+      if (!search.trim()) return true;
+      const q = search.toLowerCase();
+      return (t.subject || "").toLowerCase().includes(q)
+        || (t.parentName || "").toLowerCase().includes(q)
+        || (t.category || "").toLowerCase().includes(q)
+        || (t.messages || []).some((m) => (m.text || "").toLowerCase().includes(q));
     });
-    setReplyDrafts({ ...replyDrafts, [id]: "" });
-    showNotification("Response sent to parent.");
-  };
-
-  const visible = isReviewer
-    ? (state.suggestions || []).filter(s => !filterStatus || s.status === filterStatus)
-    : (state.suggestions || []).filter(s => s.authorId === currentUser.id);
 
   const statusColor = (status) =>
-    status === "New" ? COLORS.rose : status === "Reviewed" ? COLORS.gold : COLORS.emerald;
+    status === "New" ? COLORS.rose : status === "Reviewed" ? COLORS.gold : status === "Actioned" ? COLORS.emerald : COLORS.textMuted;
 
+  // ── THREAD DETAIL (chat view) ──
+  if (active) {
+    return (
+      <div>
+        <button className="btn btn-secondary btn-sm" onClick={() => setActiveId(null)} style={{ marginBottom: 16 }}>
+          ← Back to all suggestions
+        </button>
+        <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>{active.subject}</div>
+                <div style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 2 }}>
+                  {active.category}
+                  {isReviewer && ` · ${active.parentName}${active.studentName ? ` (${active.studentName})` : ""}`}
+                </div>
+              </div>
+              <span className="badge" style={{ background: `${statusColor(active.status)}33`, color: statusColor(active.status) }}>
+                {active.status}
+              </span>
+            </div>
+            {isReviewer && (
+              <div style={{ display: "flex", gap: 6, marginTop: 12, flexWrap: "wrap" }}>
+                {["New", "Reviewed", "Actioned", "Closed"].map((st) => (
+                  <button
+                    key={st}
+                    onClick={() => changeStatus(st)}
+                    style={{
+                      padding: "4px 12px", borderRadius: 20, fontSize: 11, fontWeight: 700, cursor: "pointer",
+                      border: `2px solid ${active.status === st ? statusColor(st) : "var(--border)"}`,
+                      background: active.status === st ? `${statusColor(st)}33` : "transparent",
+                      color: active.status === st ? statusColor(st) : COLORS.textMuted,
+                    }}
+                  >
+                    {st}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14, maxHeight: 460, overflowY: "auto" }}>
+            {(active.messages || []).map((m) => {
+              const fromParent = m.senderRole === "parent";
+              return (
+                <div key={m.id} style={{ display: "flex", justifyContent: fromParent ? "flex-start" : "flex-end" }}>
+                  <div style={{ maxWidth: "75%" }}>
+                    <div style={{ fontSize: 11, color: COLORS.textMuted, marginBottom: 3, textAlign: fromParent ? "left" : "right" }}>
+                      {m.senderName} · {new Date(m.createdAt).toLocaleString()}
+                    </div>
+                    <div
+                      style={{
+                        padding: "10px 14px", borderRadius: 14,
+                        borderBottomLeftRadius: fromParent ? 4 : 14,
+                        borderBottomRightRadius: fromParent ? 14 : 4,
+                        background: fromParent ? "rgba(255,255,255,0.06)" : "rgba(37,99,235,0.18)",
+                        border: `1px solid ${fromParent ? "var(--border)" : "rgba(37,99,235,0.35)"}`,
+                        fontSize: 14, lineHeight: 1.5, color: COLORS.textPrimary, whiteSpace: "pre-wrap",
+                      }}
+                    >
+                      {m.text}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ padding: "14px 20px", borderTop: "1px solid var(--border)" }}>
+            {active.status === "Closed" && (
+              <div style={{ fontSize: 12, color: COLORS.textMuted, marginBottom: 8 }}>
+                {isParent
+                  ? "This conversation is closed — sending a message will reopen it."
+                  : "This conversation is closed."}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 10 }}>
+              <textarea
+                className="form-input"
+                rows={2}
+                placeholder="Type a message…"
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
+              />
+              <button className="btn btn-primary" onClick={sendReply} disabled={sending || !replyText.trim()}>Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── THREAD LIST ──
   return (
     <div>
       <div className="section-header">
@@ -3998,121 +4209,118 @@ function SuggestionsPage({ state, updateState, currentUser, showNotification }) 
           <div className="section-title">{isReviewer ? "Parent Suggestions" : "Suggest an Improvement"}</div>
           <div className="section-sub">
             {isReviewer
-              ? `${visible.length} suggestion${visible.length === 1 ? "" : "s"}`
+              ? `${visibleList.length} conversation${visibleList.length === 1 ? "" : "s"}`
               : "Tell the school what you'd like to see improved — every suggestion reaches the school office."}
           </div>
         </div>
-        {isReviewer && (
+        {isParent && (
+          <button className="btn btn-primary" onClick={() => setShowNewForm((s) => !s)}>
+            <Icon name="lightbulb" size={16} /> New Suggestion
+          </button>
+        )}
+      </div>
+
+      {isReviewer && (
+        <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
           <select className="form-input" style={{ maxWidth: 200 }} value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
             <option value="">All statuses</option>
             <option value="New">New</option>
             <option value="Reviewed">Reviewed</option>
             <option value="Actioned">Actioned</option>
+            <option value="Closed">Closed</option>
           </select>
-        )}
-      </div>
+          <input
+            className="form-input"
+            style={{ maxWidth: 300 }}
+            placeholder="Search subject, parent, category, message…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+      )}
 
-      {isParent && (
-        <div className="card" style={{ marginBottom: 24 }}>
+      {isParent && showNewForm && (
+        <div className="card" style={{ marginBottom: 20 }}>
           <div className="modal-title" style={{ marginBottom: 16 }}>New Suggestion</div>
           <div className="grid-2">
             <div className="form-group">
               <label className="form-label">Category</label>
-              <select className="form-input" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              <select className="form-input" value={newForm.category} onChange={(e) => setNewForm({ ...newForm, category: e.target.value })}>
+                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
-            {studentUser && (
-              <div className="form-group">
-                <label className="form-label">Regarding</label>
-                <input className="form-input" value={studentUser.name} disabled />
-              </div>
-            )}
+            <div className="form-group">
+              <label className="form-label">Subject</label>
+              <input
+                className="form-input"
+                placeholder="e.g. More computers for ICT lab"
+                value={newForm.subject}
+                onChange={(e) => setNewForm({ ...newForm, subject: e.target.value })}
+              />
+            </div>
           </div>
           <div className="form-group">
             <label className="form-label">Your suggestion</label>
             <textarea
               className="form-input"
               rows={4}
-              value={form.message}
-              onChange={(e) => setForm({ ...form, message: e.target.value })}
-              placeholder="e.g. It would help if the school posted the exam timetable earlier..."
+              value={newForm.message}
+              onChange={(e) => setNewForm({ ...newForm, message: e.target.value })}
+              placeholder="Describe your suggestion in detail…"
             />
           </div>
-          <button className="btn btn-primary" onClick={submitSuggestion}>
+          <button className="btn btn-primary" onClick={submitNew} disabled={sending}>
             <Icon name="lightbulb" size={16} /> Send Suggestion
           </button>
         </div>
       )}
 
-      {visible.map((s) => (
-        <div key={s.id} className="card" style={{ marginBottom: 12 }}>
-          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
-                <span className="badge badge-blue">{s.category}</span>
-                <span className="badge" style={{ background: `${statusColor(s.status)}33`, color: statusColor(s.status) }}>{s.status}</span>
-                {isReviewer && <span className="badge badge-gray">{s.authorName}{s.studentName ? ` · ${s.studentName}` : ""}</span>}
-                <span className="badge badge-gray">{new Date(s.date).toLocaleDateString()}</span>
-              </div>
-              <div style={{ fontSize: 14, color: COLORS.textSecondary, lineHeight: 1.6 }}>{s.message}</div>
-
-              {s.adminResponse && (
-                <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.25)", borderRadius: 8 }}>
-                  <div style={{ fontSize: 11, color: COLORS.blueLight, fontWeight: 700, marginBottom: 3 }}>
-                    Response from {s.respondedByName} · {new Date(s.respondedAt).toLocaleDateString()}
-                  </div>
-                  <div style={{ fontSize: 13, color: COLORS.textSecondary }}>{s.adminResponse}</div>
-                </div>
-              )}
-
-              {isReviewer && (
-                <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                  {["New", "Reviewed", "Actioned"].map(st => (
-                    <button
-                      key={st}
-                      onClick={() => updateStatus(s.id, st)}
-                      style={{
-                        padding: "4px 12px", borderRadius: 20, fontSize: 11, fontWeight: 700, cursor: "pointer",
-                        border: `2px solid ${s.status === st ? statusColor(st) : "var(--border)"}`,
-                        background: s.status === st ? `${statusColor(st)}33` : "transparent",
-                        color: s.status === st ? statusColor(st) : COLORS.textMuted,
-                      }}
-                    >
-                      {st}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {isReviewer && (
-                <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
-                  <input
-                    className="form-input"
-                    placeholder={s.adminResponse ? "Update your response…" : "Write a response to the parent…"}
-                    value={replyDrafts[s.id] || ""}
-                    onChange={(e) => setReplyDrafts({ ...replyDrafts, [s.id]: e.target.value })}
-                    onKeyDown={(e) => { if (e.key === "Enter") sendReply(s.id); }}
-                  />
-                  <button className="btn btn-secondary btn-sm" onClick={() => sendReply(s.id)}>Reply</button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      ))}
-
-      {visible.length === 0 && (
+      {loading ? (
+        <div className="empty-state card"><div className="empty-state-text">Loading…</div></div>
+      ) : visibleList.length === 0 ? (
         <div className="empty-state card">
           <div className="empty-state-icon">💡</div>
           <div className="empty-state-text">
             {isParent ? "You haven't sent any suggestions yet." : "No suggestions match this filter."}
           </div>
         </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {visibleList.map((t) => {
+            const msgs = t.messages || [];
+            const lastMsg = msgs[msgs.length - 1];
+            const showUnreadDot = isParent ? t.parentUnread : t.status === "New";
+            return (
+              <div key={t.id} className="card" style={{ cursor: "pointer", padding: "14px 18px" }} onClick={() => openThread(t)}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      {showUnreadDot && <span style={{ width: 8, height: 8, borderRadius: "50%", background: COLORS.rose, flexShrink: 0 }} />}
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{t.subject}</div>
+                    </div>
+                    <div style={{ fontSize: 12, color: COLORS.textMuted, marginTop: 3 }}>
+                      {t.category}{isReviewer ? ` · ${t.parentName}${t.studentName ? ` (${t.studentName})` : ""}` : ""}
+                    </div>
+                    {lastMsg && (
+                      <div style={{ fontSize: 13, color: COLORS.textSecondary, marginTop: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {lastMsg.senderRole === "parent" ? "" : `${lastMsg.senderName}: `}{lastMsg.text}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ textAlign: "right", flexShrink: 0 }}>
+                    <span className="badge" style={{ background: `${statusColor(t.status)}33`, color: statusColor(t.status) }}>{t.status}</span>
+                    <div style={{ fontSize: 11, color: COLORS.textMuted, marginTop: 6 }}>{new Date(t.updatedAt).toLocaleDateString()}</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
 }
+
 
 
 // ─── STUDENTS PAGE ────────────────────────────────────────────────────────────

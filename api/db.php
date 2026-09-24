@@ -154,7 +154,14 @@ $saveMap = [
     'save_attendance'    => 'attendance',
     'save_gate_code'            => 'gateCode',
     'save_attendance_settings'  => 'attendanceSettings',
-    'save_suggestions'          => 'suggestions',
+    // Deliberately NOT 'suggestions' — that slice is now exclusively
+    // read/written through api/suggestions.php, which requires a valid
+    // JWT and checks per-thread ownership server-side before any write.
+    // This generic endpoint has no auth or ownership check at all, so
+    // leaving 'suggestions' reachable here would let any caller overwrite
+    // every parent's private conversations. 'suggestions' stays in
+    // defaultState() below purely so load_all still returns an initial
+    // snapshot (used for the sidebar's unread badge on first paint).
 ];
 
 if (isset($saveMap[$action])) {
